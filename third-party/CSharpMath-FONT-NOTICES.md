@@ -1,0 +1,19 @@
+# CSharpMath embedded font notices
+
+Font files are distributed unmodified inside CSharpMath.Rendering 0.5.1.
+
+
+## latinmodern-math.otf
+
+Copyright 2012--2014 for Latin Modern Math OTF by B. Jackowski, P. Strzelczyk and P. Pianowski (on behalf of TeX users groups). This work is released under the GUST Font License -- see http://tug.org/fonts/licenses/GUST-FONT-LICENSE.txt for details.
+
+## cyrillic-modern-nmr10.otf
+
+Copyright (c) 1997, 2009 American Mathematical Society (<http://www.ams.org>), with Reserved Font Name CMR10.
+
+Copyright (c) 2012-2014 Andrey V. Panov
+
+## AMS-Capital-Blackboard-Bold.otf
+
+Taken from AMSMathematicalSymbol-Medium5, Copyright (c) 1997, 2009 American Mathematical Society (<http://www.ams.org>), with Reserved Font Name MSBM9.
+Extracted by Happypig375, (c) 2018

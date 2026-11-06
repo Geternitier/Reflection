@@ -1,0 +1,211 @@
+﻿<Window x:Class="Reflection.Desktop.MainWindow"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ xmlns:local="clr-namespace:Reflection.Desktop"
+ xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+ Style="{StaticResource {x:Type Window}}" Title="Reflection · 本地角色对话"
+ Width="1440" Height="940" MinWidth="720" MinHeight="620" WindowStyle="None"
+ WindowStartupLocation="CenterScreen" AllowDrop="True" PreviewDragOver="Window_DragOver" PreviewDrop="Window_Drop" PreviewDragLeave="Window_DragLeave">
+ <shell:WindowChrome.WindowChrome><shell:WindowChrome CaptionHeight="32" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="8" UseAeroCaptionButtons="False"/></shell:WindowChrome.WindowChrome>
+ <Grid x:Name="WorkspaceRoot" Background="{DynamicResource Surface}">
+  <Grid.RowDefinitions><RowDefinition Height="32"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+  <Grid.ColumnDefinitions><ColumnDefinition x:Name="NavigationColumn" Width="254"/><ColumnDefinition x:Name="SidebarColumn" Width="0"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+  <Border x:Name="DrawerScrim" Grid.Row="1" Grid.Column="2" Panel.ZIndex="9" Background="{DynamicResource Tone40000000}" Visibility="Collapsed" MouseLeftButtonDown="DismissDrawer_Click"/>
+  <Border x:Name="SidebarPanel" Grid.RowSpan="2" Grid.Column="0" Background="{DynamicResource Sidebar}" BorderBrush="{DynamicResource Line}" BorderThickness="0,0,1,0">
+   <Grid Margin="16,22,16,18"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+    <StackPanel Orientation="Horizontal" Margin="8,0,0,26"><Image Width="34" Height="34" Source="Assets/Reflection.png" RenderOptions.BitmapScalingMode="HighQuality"/><TextBlock Text="Reflection" FontFamily="Georgia" FontSize="25" Margin="10,0,0,0" VerticalAlignment="Center"/></StackPanel>
+    <StackPanel Grid.Row="1">
+     <Button x:Name="NewChatButton" Click="NewChat_Click" HorizontalContentAlignment="Left" Margin="0,0,0,12" AutomationProperties.Name="新建对话" ToolTip="新建对话 · Ctrl+N"><StackPanel Orientation="Horizontal"><local:Glyph Data="{StaticResource IconPlus}" Width="18" Height="18" Margin="0,0,10,0"/><TextBlock Text="新建对话"/></StackPanel></Button>
+     <Button x:Name="CardsNav" Style="{StaticResource SidebarNav}" Click="CardsNav_Click" AutomationProperties.Name="角色卡片"><StackPanel Orientation="Horizontal"><local:Glyph Data="{StaticResource IconRole}" Width="19" Height="19" Margin="0,0,11,0"/><TextBlock Text="角色"/></StackPanel></Button>
+     <Button x:Name="ChatNav" Style="{StaticResource SidebarNav}" Click="ChatNav_Click" AutomationProperties.Name="对话空间"><StackPanel Orientation="Horizontal"><local:StudioIcon Kind="chat" Width="19" Height="19" Foreground="{DynamicResource Ink}" Margin="0,0,11,0"/><TextBlock Text="对话"/></StackPanel></Button>
+     <Button x:Name="ReaderNav" Style="{StaticResource SidebarNav}" Click="ReaderNav_Click" AutomationProperties.Name="阅读"><StackPanel Orientation="Horizontal"><local:Glyph Data="M 4,4 L 10,4 Q 12,4 12,6 L 12,21 M 20,4 L 14,4 Q 12,4 12,6 M 4,4 L 4,18 L 10,18 Q 12,18 12,21 Q 12,18 14,18 L 20,18 L 20,4" Width="19" Height="19" Margin="0,0,11,0"/><TextBlock Text="阅读"/></StackPanel></Button>
+    </StackPanel>
+    <StackPanel Grid.Row="2" Margin="0,24,0,12"><ToggleButton x:Name="HistorySectionToggle" IsChecked="{Binding HistoryExpanded, Mode=OneWay}" Click="ToggleHistory_Click" AutomationProperties.Name="展开或收起最近对话" Margin="2,0,0,8" HorizontalAlignment="Left"><ToggleButton.Template><ControlTemplate TargetType="ToggleButton"><Border Background="Transparent" Padding="8,6"><StackPanel Orientation="Horizontal"><local:Glyph x:Name="Arrow" Data="{StaticResource IconChevron}" Width="12" Height="12" Foreground="{DynamicResource Muted}" RenderTransformOrigin="0.5,0.5" Margin="0,0,6,0"/><TextBlock Text="最近对话" FontSize="11" Foreground="{DynamicResource Muted}"/></StackPanel></Border><ControlTemplate.Triggers><Trigger Property="IsChecked" Value="False"><Setter TargetName="Arrow" Property="RenderTransform"><Setter.Value><RotateTransform Angle="-90"/></Setter.Value></Setter></Trigger></ControlTemplate.Triggers></ControlTemplate></ToggleButton.Template></ToggleButton><TextBox Visibility="{Binding HistoryExpanded, Converter={StaticResource BoolVisibility}}" Tag="搜索对话…" Text="{Binding Search, UpdateSourceTrigger=PropertyChanged}" Padding="10,8" Background="Transparent" AutomationProperties.Name="搜索对话"/></StackPanel>
+    <Grid x:Name="HistorySection" Grid.Row="3" Visibility="{Binding HistoryExpanded, Converter={StaticResource BoolVisibility}}"><ListBox x:Name="HistoryList" ItemsSource="{Binding History}" SelectionChanged="History_SelectionChanged" VirtualizingPanel.IsVirtualizingWhenGrouping="True">
+     <ListBox.GroupStyle><GroupStyle><GroupStyle.HeaderTemplate><DataTemplate><TextBlock Text="{Binding Name, Converter={StaticResource DayLabel}}" FontSize="11" Foreground="{DynamicResource Muted}" Margin="8,14,0,10"/></DataTemplate></GroupStyle.HeaderTemplate></GroupStyle></ListBox.GroupStyle>
+     <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}"><Setter Property="Padding" Value="8,2"/><Setter Property="Margin" Value="0,1"/></Style></ListBox.ItemContainerStyle>
+     <ListBox.ItemTemplate><DataTemplate>
+      <Grid x:Name="HistoryRow" Background="Transparent" MinHeight="30">
+       <Grid x:Name="HistoryDisplay" Visibility="{Binding Renaming, Converter={StaticResource InverseBool}}"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+        <TextBlock Text="{Binding DisplayTitle}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" FontSize="13" VerticalAlignment="Center" ToolTip="{Binding Title}"/>
+        <StackPanel x:Name="HistoryActions" Grid.Column="1" Orientation="Horizontal" Visibility="Collapsed" Margin="6,0,0,0"><Button Style="{StaticResource MiniIconButton}" Width="25" Height="26" ToolTip="改名" AutomationProperties.Name="改名" Content="{StaticResource IconEdit}" PreviewMouseLeftButtonDown="RenameHistory_Down"/><Button Style="{StaticResource MiniIconButton}" Width="25" Height="26" ToolTip="删除" AutomationProperties.Name="删除" Content="{StaticResource IconDelete}" PreviewMouseLeftButtonDown="DeleteHistory_Down"/></StackPanel>
+       </Grid>
+       <TextBox Text="{Binding Title, UpdateSourceTrigger=PropertyChanged}" Visibility="{Binding Renaming, Converter={StaticResource BoolVisibility}}" LostFocus="RenameBox_LostFocus" KeyDown="RenameBox_KeyDown" Padding="6,3" MinHeight="28"/>
+      </Grid>
+      <DataTemplate.Triggers><Trigger SourceName="HistoryRow" Property="IsMouseOver" Value="True"><Setter TargetName="HistoryActions" Property="Visibility" Value="Visible"/></Trigger></DataTemplate.Triggers>
+     </DataTemplate></ListBox.ItemTemplate>
+    </ListBox><StackPanel Visibility="{Binding HistoryEmpty, Converter={StaticResource BoolVisibility}}" Margin="12,36,12,0"><local:StudioIcon Kind="chat" Foreground="{DynamicResource ToneB5B2AD}" Width="36" Height="36"/><TextBlock Text="{Binding HistoryEmptyText}" Foreground="{DynamicResource Muted}" FontSize="12" HorizontalAlignment="Center" Margin="0,14,0,0"/></StackPanel></Grid>
+    <StackPanel x:Name="SidebarTools" Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+     <Button x:Name="WorkspaceModeButton" Style="{StaticResource IconButton}" Click="WorkspaceMode_Click" ToolTip="切换到隐私模式" AutomationProperties.Name="日常模式，切换到隐私模式" Margin="0,0,8,0"/>
+     <Button x:Name="ThemeToggle" Style="{StaticResource IconButton}" Content="{DynamicResource ThemeIcon}" ToolTip="{DynamicResource ThemeAction}" AutomationProperties.Name="{DynamicResource ThemeAction}" Click="ToggleTheme_Click" Margin="0,0,8,0"/>
+     <Button x:Name="SettingsNav" Style="{StaticResource IconButton}" Content="{StaticResource IconSettings}" ToolTip="设置" Click="SettingsNav_Click" AutomationProperties.Name="设置"/>
+    </StackPanel>
+   </Grid>
+  </Border>
+  <Grid Grid.Column="2" Background="{DynamicResource Surface}">
+   <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" shell:WindowChrome.IsHitTestVisibleInChrome="True">
+    <TextBlock x:Name="PrivateModeIndicator" Text="隐私模式" Visibility="Collapsed" FontSize="11" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" Margin="0,0,12,0"/><Button Style="{StaticResource CaptionButton}" ToolTip="最小化" AutomationProperties.Name="最小化" Content="{StaticResource IconMinimize}" Click="Minimize_Click"/>
+    <Button Style="{StaticResource CaptionButton}" ToolTip="最大化或还原" AutomationProperties.Name="最大化或还原" Content="{StaticResource IconMaximize}" Click="Maximize_Click"/>
+    <Button Style="{StaticResource CaptionButton}" ToolTip="关闭" AutomationProperties.Name="关闭" Content="{StaticResource IconClose}" Click="Close_Click"/>
+   </StackPanel>
+  </Grid>
+  <Grid Grid.Row="1" Grid.Column="2">
+   <Grid.RowDefinitions><RowDefinition Height="44"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+   <Border x:Name="TopBar" Padding="20,5" Background="{DynamicResource Surface}">
+    <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+     <Button x:Name="HistoryToggle" Style="{StaticResource IconButton}" Content="{StaticResource IconMenu}" Click="ToggleSidebar_Click" ToolTip="展开或收起侧栏" AutomationProperties.Name="展开或收起侧栏" Margin="0,0,10,0"/>
+     <Grid Grid.Column="1" VerticalAlignment="Center" Margin="0,0,12,0" MaxWidth="260"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock x:Name="PageLabel" Text="角色" FontWeight="SemiBold" FontSize="14" VerticalAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/><Button x:Name="TitleButton" Grid.Column="1" Visibility="Collapsed" Style="{StaticResource IconButton}" Content="{StaticResource IconEdit}" Click="BeginTitleEdit" ToolTip="改名" AutomationProperties.Name="改名" Margin="8,0,0,0"/><TextBox x:Name="TitleBox" Grid.ColumnSpan="2" Visibility="Collapsed" MinHeight="32" Padding="8,4" LostFocus="TitleBox_LostFocus" KeyDown="TitleBox_KeyDown"/></Grid>
+     <ContentControl x:Name="ReaderHeaderHost" Grid.Column="2" Visibility="Collapsed" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Center"/>
+     <StackPanel x:Name="CardsHeaderActions" Grid.Column="3" Orientation="Horizontal"><Button Content="导入" Style="{StaticResource Quiet}" Click="ImportCard_Click" IsEnabled="{Binding Idle}" Margin="0,0,10,0" Padding="12,6" ToolTip="导入 JSON 角色卡" AutomationProperties.Name="导入 JSON 角色卡"/><Button Content="＋  创建角色" Style="{StaticResource Primary}" Click="CreateCard_Click" IsEnabled="{Binding Idle}" Padding="14,6"/></StackPanel>
+     <StackPanel x:Name="ChatHeaderActions" Grid.Column="4" Visibility="Collapsed" Orientation="Horizontal" Margin="0,0,12,0"><Button Style="{StaticResource IconButton}" ToolTip="导出" AutomationProperties.Name="导出" Content="{StaticResource IconExport}" Click="ExportChat_Click"/><Button Style="{StaticResource IconButton}" ToolTip="删除" AutomationProperties.Name="删除" Content="{StaticResource IconDelete}" Click="DeleteChat_Click" IsEnabled="{Binding Idle}"/></StackPanel>
+     <Border x:Name="ConnectionBadge" Grid.Column="5" Visibility="Collapsed" Background="{DynamicResource ToneE8EDE4}" CornerRadius="14" Padding="10,6" VerticalAlignment="Center" MaxWidth="250"><StackPanel Orientation="Horizontal"><Ellipse Width="6" Height="6" Fill="{DynamicResource Tone52735D}" VerticalAlignment="Center" Margin="0,0,7,0"/><TextBlock Text="{Binding Connection}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" FontSize="11" Foreground="{DynamicResource Tone48624E}" MaxWidth="200"/></StackPanel></Border>
+    </Grid>
+   </Border>
+   <Grid x:Name="ChatPage" Grid.Row="1" Visibility="Collapsed">
+    <Grid.RowDefinitions><RowDefinition Height="0"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+    <Grid Grid.Row="1">
+     <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding IsEmpty, Converter={StaticResource BoolVisibility}}">
+      <StackPanel x:Name="WelcomeContent" Margin="36,20,36,28" MaxWidth="760">
+       <TextBlock x:Name="WelcomeHeadline" Text="新对话" FontSize="26" FontWeight="SemiBold"/>
+      </StackPanel>
+     </ScrollViewer>
+     <ListBox local:SmoothScroll.Enabled="True" VirtualizingPanel.CacheLength="1,2" VirtualizingPanel.CacheLengthUnit="Page" VirtualizingPanel.VirtualizationMode="Recycling" PreviewMouseDown="Messages_MouseDown" x:Name="MessagesList" ItemsSource="{Binding Current.Messages}" VirtualizingPanel.ScrollUnit="Pixel" ScrollViewer.CanContentScroll="True" Margin="0,8,3,8" Padding="28,0,24,0" ScrollViewer.ScrollChanged="Messages_ScrollChanged">
+      <ListBox.Style><Style TargetType="ListBox" BasedOn="{StaticResource {x:Type ListBox}}"><Style.Triggers><DataTrigger Binding="{Binding IsEmpty}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers></Style></ListBox.Style>
+      <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="Padding" Value="0"/><Setter Property="Margin" Value="0"/><Setter Property="Focusable" Value="False"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem"><ContentPresenter/></ControlTemplate></Setter.Value></Setter></Style></ListBox.ItemContainerStyle>
+      <ListBox.ItemTemplate><DataTemplate>
+       <Grid x:Name="MessageRow" MaxWidth="800" HorizontalAlignment="Stretch" Margin="0,6,0,18"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <Grid x:Name="UserMessageArea" Background="Transparent"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <Border x:Name="Bubble" Background="Transparent" CornerRadius="18" Padding="24,20" BorderBrush="{DynamicResource Line}" BorderThickness="0" HorizontalAlignment="Stretch">
+         <StackPanel>
+          <TextBlock Text="开场" FontSize="12" Foreground="{DynamicResource Accent}" Margin="0,0,0,8"><TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding Opening}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></TextBlock.Style></TextBlock>
+          <ItemsControl ItemsSource="{Binding Images}" Margin="0,0,0,8"><ItemsControl.Style><Style TargetType="ItemsControl"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding HasImages}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></ItemsControl.Style><ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel><ItemsControl.ItemTemplate><DataTemplate><Button Margin="0,0,8,8" Padding="0" Click="ZoomImage_Click" BorderThickness="0"><Image Source="{Binding Converter={StaticResource Base64Image}}" Width="180" Height="120" Stretch="UniformToFill"/></Button></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+          <Expander local:ThinkingExpansion.Active="{Binding IsThinking}" Header="思考" Margin="0,0,0,8"><Expander.Style><Style TargetType="Expander" BasedOn="{StaticResource {x:Type Expander}}"><Setter Property="Visibility" Value="Collapsed"/><Setter Property="IsExpanded" Value="False"/><Style.Triggers><DataTrigger Binding="{Binding HasThinking}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></Expander.Style><TextBlock Text="{Binding Thinking}" FontSize="13" Foreground="{DynamicResource Muted}"/></Expander>
+          <local:MarkdownText x:Name="Markdown" Source="{Binding Content}" IsStreaming="{Binding Incomplete}"/>
+          <TextBlock Text="{Binding Error}" Foreground="{DynamicResource Danger}" FontSize="12" Margin="0,8,0,0"><TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding HasError}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></TextBlock.Style></TextBlock>
+          <TextBlock Text="已停止" FontSize="12" Foreground="{DynamicResource Muted}" Margin="0,8,0,0"><TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding Stopped}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></TextBlock.Style></TextBlock>
+          <StackPanel x:Name="MessageActions" Orientation="Horizontal" Margin="-5,8,0,0">
+           <Button Style="{StaticResource MiniIconButton}" ToolTip="编辑" AutomationProperties.Name="编辑" x:Name="EditMessage" Content="{StaticResource IconEdit}" Click="EditMessage_Click" Margin="0,0,6,0"/>
+           <Button Style="{StaticResource MiniIconButton}" ToolTip="复制" AutomationProperties.Name="复制" Content="{StaticResource IconCopy}" Click="CopyMessage_Click" Margin="0,0,6,0"/>
+           <Button Style="{StaticResource MiniIconButton}" ToolTip="接着写" AutomationProperties.Name="接着写" x:Name="ContinueMessage" Content="{StaticResource IconContinue}" Click="Continue_Click" Margin="0,0,6,0" Visibility="Collapsed"/>
+           <Button Style="{StaticResource MiniIconButton}" ToolTip="重新生成" AutomationProperties.Name="重新生成" x:Name="RegenMessage" Content="{StaticResource IconRefresh}" Click="Regenerate_Click" Visibility="Collapsed"/>
+          </StackPanel>
+         </StackPanel>
+        </Border>
+        <StackPanel x:Name="UserActions" Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,3,8,0" Visibility="Collapsed"><Button x:Name="UserEdit" Style="{StaticResource MiniIconButton}" Content="{StaticResource IconEdit}" ToolTip="编辑" AutomationProperties.Name="编辑用户消息" Click="EditMessage_Click"/><Button Style="{StaticResource MiniIconButton}" Content="{StaticResource IconCopy}" ToolTip="复制" AutomationProperties.Name="复制用户消息" Click="CopyMessage_Click"/></StackPanel>
+        </Grid>
+       </Grid>
+       <DataTemplate.Triggers>
+        <DataTrigger Binding="{Binding Incomplete}" Value="True"><Setter TargetName="EditMessage" Property="Visibility" Value="Collapsed"/></DataTrigger>
+        <DataTrigger Binding="{Binding IsTail}" Value="True"><Setter TargetName="ContinueMessage" Property="Visibility" Value="Visible"/><Setter TargetName="RegenMessage" Property="Visibility" Value="Visible"/></DataTrigger>
+        <DataTrigger Binding="{Binding Role}" Value="user"><Setter TargetName="UserMessageArea" Property="HorizontalAlignment" Value="Right"/><Setter TargetName="UserMessageArea" Property="MaxWidth" Value="520"/><Setter TargetName="Bubble" Property="HorizontalAlignment" Value="Right"/><Setter TargetName="Bubble" Property="MaxWidth" Value="520"/><Setter TargetName="Bubble" Property="Background" Value="{DynamicResource UserBubble}"/><Setter TargetName="Bubble" Property="Padding" Value="18,12"/><Setter TargetName="Bubble" Property="BorderThickness" Value="0"/><Setter TargetName="MessageActions" Property="Visibility" Value="Collapsed"/><Setter TargetName="ContinueMessage" Property="Visibility" Value="Collapsed"/><Setter TargetName="RegenMessage" Property="Visibility" Value="Collapsed"/><Setter TargetName="UserActions" Property="Visibility" Value="Hidden"/></DataTrigger>
+        <MultiDataTrigger><MultiDataTrigger.Conditions><Condition Binding="{Binding Role}" Value="user"/><Condition Binding="{Binding IsMouseOver, ElementName=UserMessageArea}" Value="True"/></MultiDataTrigger.Conditions><Setter TargetName="UserActions" Property="Visibility" Value="Visible"/></MultiDataTrigger>
+        <DataTrigger Binding="{Binding Incomplete}" Value="True"><Setter TargetName="UserEdit" Property="Visibility" Value="Collapsed"/></DataTrigger>
+       </DataTemplate.Triggers>
+      </DataTemplate></ListBox.ItemTemplate>
+     </ListBox>
+    </Grid>
+    <StackPanel Grid.Row="2" Margin="24,0,24,16" MaxWidth="840" HorizontalAlignment="Stretch">
+     <TextBlock Text="当前模型未声明视觉能力，图片可能无法被理解。" Foreground="{DynamicResource Muted}" FontSize="12" Margin="8,0,8,8" Visibility="{Binding VisionWarning, Converter={StaticResource BoolVisibility}}"/>
+     <ItemsControl ItemsSource="{Binding Current.Attachments}" Margin="8,0,8,8" Visibility="{Binding HasAttachments, Converter={StaticResource BoolVisibility}}"><ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel><ItemsControl.ItemTemplate><DataTemplate><Border BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="8" Padding="6" Margin="0,0,8,0" Background="{DynamicResource Panel}"><StackPanel><Image Source="{Binding Converter={StaticResource Base64Image}}" Width="72" Height="72" Stretch="UniformToFill"/><Button Style="{StaticResource IconButton}" ToolTip="移除" AutomationProperties.Name="移除" Content="{StaticResource IconClose}" Click="RemoveAttachment_Click" Margin="0,6,0,0"/></StackPanel></Border></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+     <Border x:Name="ComposerPanel" CornerRadius="16" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource ToneD9D5C9}" BorderThickness="1" Padding="16,14,16,12" Margin="8,0,8,0">
+      <Grid>
+       <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+
+
+       <TextBox Grid.Row="0" x:Name="Composer" Tag="输入消息…" ToolTip="Enter 发送，Shift+Enter 换行" Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}" MinHeight="58" MaxHeight="150" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" BorderThickness="0" Padding="2,6" FontSize="13" PreviewKeyDown="Composer_KeyDown" DataObject.Pasting="Composer_Pasting" IsEnabled="{Binding Idle}" AutomationProperties.Name="输入消息"/>
+       <DockPanel Grid.Row="1" Margin="0,10,0,0">
+        <Button Style="{StaticResource SendIconButton}" ToolTip="{Binding SendLabel}" AutomationProperties.Name="{Binding SendLabel}" DockPanel.Dock="Right" Click="Send_Click" Margin="8,0,0,0"/>
+        <Button Style="{StaticResource IconButton}" ToolTip="辅助起草" AutomationProperties.Name="辅助起草" DockPanel.Dock="Right" Content="{StaticResource IconHelp}" Click="Help_Click" Margin="8,0,0,0"/>
+        <WrapPanel VerticalAlignment="Center">
+         <Button Style="{StaticResource IconButton}" ToolTip="添加文本附件" AutomationProperties.Name="添加文本附件" Content="{StaticResource IconAttach}" Click="Attach_Click" IsEnabled="{Binding Idle}"/>
+         <Button Style="{StaticResource IconButton}" ToolTip="添加图片" AutomationProperties.Name="添加图片" Content="{StaticResource IconImage}" Click="AddImage_Click" IsEnabled="{Binding Idle}"/>
+         <ToggleButton Style="{StaticResource ReasonChip}" x:Name="ReasonToggle" Checked="ReasonToggle_Checked" Content="{Binding ReasonLabel}" ToolTip="推理强度" AutomationProperties.Name="推理强度" Height="30" Padding="0" Margin="10,0,0,0" FontSize="11"/>
+         <Border Width="1" Height="16" Background="{DynamicResource ToneE6E1D7}" Margin="12,0,0,0" VerticalAlignment="Center"/>
+         <ComboBox x:Name="ModelPicker" Style="{StaticResource ComposerSelect}" ItemsSource="{Binding Models}" SelectedItem="{Binding SelectedModel}" ItemTemplate="{StaticResource ModelOptionTemplate}" Width="210" MinHeight="30" Margin="10,0,0,0" Tag="连接本地模型" ToolTip="选择本地模型" AutomationProperties.Name="选择模型" IsEnabled="{Binding Idle}"/>
+        </WrapPanel>
+       </DockPanel>
+       <Border x:Name="ComposerDropHint" Grid.RowSpan="2" Background="{DynamicResource ToneF5F1E8}" CornerRadius="12" BorderBrush="{DynamicResource Coral}" BorderThickness="1" Visibility="Collapsed" IsHitTestVisible="False"><TextBlock Text="释放以添加图片" Foreground="{DynamicResource Tone836D58}" FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+      </Grid>
+     </Border>
+
+    </StackPanel>
+   </Grid>
+   <Grid x:Name="CardsRoot" Margin="0,0,3,0" Grid.Row="1">
+    <Grid x:Name="CardsCanvas" Margin="28,10,28,24">
+     <ListBox x:Name="CharacterGallery" local:SmoothScroll.Enabled="True" ItemsSource="{Binding Characters}" ScrollViewer.CanContentScroll="True" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" ScrollViewer.HorizontalScrollBarVisibility="Disabled" ScrollViewer.VerticalScrollBarVisibility="Auto" Padding="0" BorderThickness="0">
+      <ListBox.ItemsPanel><ItemsPanelTemplate><local:GalleryPanel/></ItemsPanelTemplate></ListBox.ItemsPanel>
+      <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="VerticalContentAlignment" Value="Stretch"/><Setter Property="Padding" Value="0"/><Setter Property="Focusable" Value="False"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem"><ContentPresenter/></ControlTemplate></Setter.Value></Setter></Style></ListBox.ItemContainerStyle>
+      <ListBox.ItemTemplate><DataTemplate>
+       <Button Click="OpenCard_Click" Padding="10" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" AutomationProperties.Name="{Binding Name}">
+        <Button.Template><ControlTemplate TargetType="Button"><Grid><Border x:Name="Frame" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="16" Padding="{TemplateBinding Padding}"><ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/></Border><Border x:Name="Focus" CornerRadius="16" BorderBrush="{DynamicResource Coral}" BorderThickness="2" Visibility="Collapsed" IsHitTestVisible="False"/></Grid><ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Frame" Property="BorderBrush" Value="{DynamicResource ToneC4BCAC}"/></Trigger></ControlTemplate.Triggers></ControlTemplate></Button.Template>
+        <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+         <local:PortraitFrame x:Name="CardPortrait" CornerRadius="12" ClipToBounds="True"><Grid><local:MemphisArt Variant="{Binding Name}"/><Border CornerRadius="12"><Border.Background><ImageBrush ImageSource="{Binding Image, Converter={StaticResource Base64Image}}" Stretch="UniformToFill"/></Border.Background></Border></Grid></local:PortraitFrame>
+         <TextBlock Grid.Row="1" Text="{Binding Name}" FontSize="22" FontWeight="Normal" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" Margin="10,18,10,8"/>
+         <TextBlock Grid.Row="2" Text="{Binding Description}" Foreground="{DynamicResource Muted}" FontSize="12" LineHeight="22" Height="48" TextTrimming="CharacterEllipsis" Margin="10,0,10,12"/>
+        </Grid>
+       </Button>
+      </DataTemplate></ListBox.ItemTemplate>
+     </ListBox>
+    </Grid>
+   </Grid>
+   <local:ReaderView x:Name="ReaderPage" Grid.Row="1" Visibility="Collapsed"/>
+   <ScrollViewer local:SmoothScroll.Enabled="True" x:Name="CharacterDetailPage" Margin="0,0,3,0" Grid.Row="1" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+    <StackPanel Margin="32,8,32,32" MaxWidth="1120">
+     <DockPanel Margin="0,0,0,26"><WrapPanel DockPanel.Dock="Right"><Button x:Name="StartDetailButton" Content="开始对话" Style="{StaticResource Primary}" Click="UseCard_Click" IsEnabled="{Binding Idle}" Margin="8,0,0,0"/><Button Content="编辑" Click="EditDetail_Click" IsEnabled="{Binding Idle}" Margin="8,0,0,0"/><Button Content="导出" Click="ExportDetail_Click" Margin="8,0,0,0"/><Button Content="删除" Click="DeleteDetail_Click" IsEnabled="{Binding Idle}" Style="{StaticResource Quiet}" Margin="8,0,0,0"/></WrapPanel><Button Content="‹  角色" Click="CardsNav_Click" Style="{StaticResource Quiet}" Padding="0,8" HorizontalAlignment="Left" VerticalAlignment="Center"/></DockPanel>
+     <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><Grid.ColumnDefinitions><ColumnDefinition x:Name="DetailImageColumn" Width="300"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+      <local:PortraitFrame x:Name="DetailImagePanel" CornerRadius="16" ClipToBounds="True" Margin="0,0,28,0" VerticalAlignment="Top"><Grid><local:MemphisArt Variant="{Binding DetailCard.Name}"/><Border CornerRadius="16"><Border.Background><ImageBrush ImageSource="{Binding DetailCard.Image, Converter={StaticResource Base64Image}, ConverterParameter=640}" Stretch="UniformToFill"/></Border.Background></Border></Grid></local:PortraitFrame>
+      <StackPanel x:Name="DetailContentPanel" Grid.Column="1">
+       <TextBlock Text="{Binding DetailCard.Name}" FontSize="30" FontWeight="SemiBold" Margin="0,0,0,12"/>
+       <TextBox Text="{Binding DetailCard.Description, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0" Background="Transparent" Padding="0" Foreground="{DynamicResource Muted}"/>
+       <Border Height="1" Background="{DynamicResource Line}" Margin="0,24"/>
+       <TextBlock Text="基本设定" FontSize="13" FontWeight="SemiBold" Margin="0,0,0,10"/>
+       <TextBox Text="{Binding DetailCard.Setting, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0" Background="Transparent" Padding="0" Tag="未设置"/>
+       <TextBlock Text="开场白" FontSize="13" FontWeight="SemiBold" Margin="0,24,0,10"/>
+       <TextBox Text="{Binding DetailCard.Greeting, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0" Background="Transparent" Padding="0" Tag="未设置"/>
+       <TextBlock Text="{Binding DetailCard.OpeningLabel, StringFormat=开场发言方：{0}}" Foreground="{DynamicResource Muted}" FontSize="12" Margin="0,12,0,0"/>
+       <TextBlock Text="系统提示词" FontSize="13" FontWeight="SemiBold" Margin="0,24,0,10"/>
+       <TextBox Text="{Binding DetailCard.SystemPrompt, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0" Background="Transparent" Padding="0" Tag="使用模型默认提示词"/>
+      </StackPanel>
+     </Grid>
+    </StackPanel>
+   </ScrollViewer>
+   <local:CharacterEditorView x:Name="CharacterEditor" Grid.Row="1" Visibility="Collapsed" SaveRequested="SaveCharacter_Requested" CancelRequested="CancelCharacter_Requested"/>
+   <ScrollViewer x:Name="SettingsPage" Margin="0,0,3,0" Grid.Row="1" Visibility="Collapsed" VerticalScrollBarVisibility="Auto"><StackPanel x:Name="SettingsCanvas" Margin="40,12,40,36" MaxWidth="1200">
+    <TextBlock Text="设置" FontSize="26" FontWeight="SemiBold" Margin="0,0,0,24"/>
+    <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition x:Name="SettingsAsideColumn" Width="300"/></Grid.ColumnDefinitions><StackPanel>
+     <Border Style="{StaticResource PaperPanel}" Margin="0,0,0,20"><StackPanel>
+    <DockPanel><Button Style="{StaticResource IconButton}" ToolTip="检测连接" AutomationProperties.Name="检测连接" DockPanel.Dock="Right" Content="{StaticResource IconRefresh}" Click="Discover_Click"/><TextBlock Text="本地服务" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center"/></DockPanel><TextBlock Text="启动时检测已启用地址；开启自动发现后，每 30 秒刷新一次。" FontSize="12" Foreground="{DynamicResource Muted}" Margin="0,10,0,16"/>
+    <ItemsControl x:Name="ConfiguredServices"><ItemsControl.ItemTemplate><DataTemplate><Border Background="{DynamicResource ToneF8F8F3}" CornerRadius="12" Padding="18" Margin="0,0,0,10"><DockPanel><StackPanel DockPanel.Dock="Right" Orientation="Horizontal"><Button Style="{StaticResource IconButton}" ToolTip="编辑" AutomationProperties.Name="编辑" Content="{StaticResource IconEdit}" Click="EditService_Click" Margin="0,0,6,0" VerticalAlignment="Center"/><Button Style="{StaticResource IconButton}" ToolTip="移除" AutomationProperties.Name="移除" Content="{StaticResource IconClose}" VerticalAlignment="Center" Click="DeleteService_Click"/></StackPanel><StackPanel><TextBlock Text="{Binding Name}" FontWeight="SemiBold"/><TextBlock Text="{Binding BaseUrl}" FontSize="13" Foreground="{DynamicResource Muted}" Margin="0,7,0,0"/><TextBlock Text="{Binding EnabledLabel}" FontSize="12" Foreground="{DynamicResource Muted}" Margin="0,5,0,0"/></StackPanel></DockPanel></Border></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+    <StackPanel Orientation="Horizontal" Margin="0,4,0,12"><Button Content="添加服务" Click="AddService_Click"/><CheckBox x:Name="AutoDiscover" Content="自动发现" IsChecked="True" VerticalAlignment="Center" Margin="20,0,0,0"/></StackPanel>
+    <ItemsControl ItemsSource="{Binding Services}" Margin="0,0,0,24"><ItemsControl.ItemTemplate><DataTemplate><TextBlock Foreground="{DynamicResource Muted}" FontSize="12" Margin="0,4"><Run Text="{Binding Config.Name}"/><Run Text="  ·  "/><Run Text="{Binding Detail}"/></TextBlock></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+     </StackPanel></Border>
+    <Border Style="{StaticResource PaperPanel}"><StackPanel>
+     <TextBlock Text="回答方式" FontSize="18" FontWeight="SemiBold"/>
+     <TextBlock Text="灰字是当前模型的默认值。与默认值相同的不会发送，也不会覆盖模型自带参数。没有角色卡时才使用下面的系统提示词。" FontSize="12" Foreground="{DynamicResource Muted}" Margin="0,10,0,0" LineHeight="20"/>
+     <TextBlock Text="系统提示词" Foreground="{DynamicResource Muted}" FontSize="12" Margin="0,18,0,8"/>
+     <TextBox x:Name="SystemPrompt" Tag="留空则使用模型自带的系统提示词" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="96" VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto"/>
+     <TextBlock Text="本机上下文字符预算" Foreground="{DynamicResource Muted}" FontSize="12" Margin="0,16,0,8"/>
+     <TextBox x:Name="ContextBudget" Width="220" HorizontalAlignment="Left"/>
+     <TextBlock Text="这是发送前在本机裁剪消息的字符上限，不是模型的 num_ctx。" FontSize="12" Foreground="{DynamicResource Muted}" Margin="0,8,0,16"/>
+     <Expander Header="高级采样参数" Margin="0,14,0,0"><StackPanel x:Name="ParamHost"/></Expander>
+     <Button Content="保存偏好" Style="{StaticResource Primary}" HorizontalAlignment="Left" Margin="0,18,0,0" Click="SavePreferences_Click"/>
+    </StackPanel></Border>
+    </StackPanel><StackPanel x:Name="SettingsAside" Grid.Column="1" Margin="24,0,0,0">
+     <Border BorderBrush="{DynamicResource Line}" BorderThickness="0,1,0,0" Margin="0" Padding="0"><StackPanel><TextBlock Text="数据与连接" FontWeight="SemiBold" FontSize="13"/><TextBlock Text="仅连接配置的本机服务。对话、图片与备份以明文保存在本机。" Foreground="{DynamicResource Muted}" FontSize="12" LineHeight="22" Margin="0,10,0,8"/><Button Style="{StaticResource Quiet}" Content="打开数据目录  ↗" Click="OpenData_Click" HorizontalAlignment="Left" Foreground="{DynamicResource Ink}" Padding="0,10"/><TextBlock Text="版本 0.2" Style="{StaticResource Eyebrow}" Margin="0,26,0,0"/></StackPanel></Border>
+    </StackPanel></Grid>
+   </StackPanel></ScrollViewer>
+   <TextBlock Grid.Row="2" Margin="28,6" Text="{Binding Status}" Foreground="{DynamicResource Muted}" FontSize="11" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip="{Binding Status}" Visibility="{Binding Status, Converter={StaticResource NullVisibility}}"/>
+  </Grid>
+  <Canvas x:Name="AutoScrollLayer" Grid.RowSpan="2" Grid.ColumnSpan="3" Panel.ZIndex="90" IsHitTestVisible="False" Visibility="Collapsed">
+   <Border Width="28" Height="28" CornerRadius="14" BorderBrush="{DynamicResource Line}" BorderThickness="1" Background="{DynamicResource Panel}"><local:Glyph Data="M 12,4 L 8,8 M 12,4 L 16,8 M 12,20 L 8,16 M 12,20 L 16,16 M 12,10 L 12,14" Width="22" Height="22" Foreground="{DynamicResource Ink}"/></Border>
+  </Canvas>
+  <Grid x:Name="OverlayLayer" Grid.RowSpan="2" Grid.ColumnSpan="3" Panel.ZIndex="100" Visibility="Collapsed" KeyboardNavigation.TabNavigation="Cycle" KeyboardNavigation.ControlTabNavigation="Cycle" FocusManager.IsFocusScope="True">
+   <Border Background="{DynamicResource Tone66302F2B}" MouseLeftButtonDown="OverlayBackdrop_Down"/>
+   <Border x:Name="OverlayContent" HorizontalAlignment="Center" VerticalAlignment="Center" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource ToneE1DCCE}" BorderThickness="1" CornerRadius="16"/>
+  </Grid>
+  <Grid x:Name="ChoiceLayer" Grid.RowSpan="2" Grid.ColumnSpan="3" Panel.ZIndex="200" Visibility="Collapsed">
+   <Border Background="Transparent" MouseLeftButtonDown="ChoiceBackdrop_Down"/>
+   <Border x:Name="ChoiceSurface" HorizontalAlignment="Left" VerticalAlignment="Top" Background="{DynamicResource Panel}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="10" Padding="5"/>
+  </Grid>
+ </Grid>
+</Window>

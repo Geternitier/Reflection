@@ -1,0 +1,74 @@
+# Reproducible build / publish / regression output (including Reflection-latest).
+**/bin/
+**/obj/
+/.build/
+/artifacts/
+/TestResults/
+/coverage/
+.coverage
+.coverage.*
+coverage.cobertura.xml
+__pycache__/
+*.py[cod]
+
+# Per-machine IDE state and publish profiles; project/source files stay tracked.
+.vs/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.sln.iml
+*.rsuser
+*.pubxml
+*.pubxml.user
+.vscode/*.local.json
+
+# FlashManager registration contains the developer's absolute executable path.
+/.flashservice.json
+
+# Local environment / credentials. Sanitized examples may be committed.
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.local.json
+*.local.config
+*.pfx
+*.p12
+*.pem
+*.key
+*.snk
+/.ssh/
+/.aws/
+/.azure/
+/.codex/
+
+# Runtime workspaces and root-level app state accidentally written inside the repo.
+# Scope to known locations; do not ignore all JSON, Markdown, images or fixtures.
+/data/
+/local-data/
+/private/
+/chats/
+/reader/
+/settings.json
+/characters.json
+/index.json
+.instance.lock
+
+# Temporary QA workspaces, editor leftovers, logs and crash captures.
+/.release-verify/
+/.release-verify-*/
+*.bak
+*.tmp
+*.temp
+*.log
+*.dmp
+*.etl
+*.stackdump
+*~
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+Desktop.ini

@@ -1,0 +1,24 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <PackageReference Include="CSharpMath.SkiaSharp" Version="0.5.1" />
+    <PackageReference Include="SkiaSharp" Version="2.88.9" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Win32" Version="2.88.9" />
+    <PackageReference Include="SkiaSharp.NativeAssets.macOS" Version="2.88.9" ExcludeAssets="all" />
+    <ProjectReference Include="..\Reflection.Core\Reflection.Core.csproj" />
+    <Resource Include="Assets\Reflection.png" />
+    <Resource Include="Assets\Reflection.ico" />
+    <Content Include="../../third-party/*" Link="third-party/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../LICENSE" Link="LICENSE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <ApplicationIcon>Assets\Reflection.ico</ApplicationIcon>
+  </PropertyGroup>
+
+</Project>

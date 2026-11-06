@@ -1,0 +1,122 @@
+﻿<UserControl x:Class="Reflection.Desktop.ReaderView" x:Name="ReaderRoot"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ xmlns:local="clr-namespace:Reflection.Desktop" Focusable="True">
+ <UserControl.Resources>
+  <Geometry x:Key="ReaderFolder">M 3,7 Q 3,5 5,5 L 9,5 L 11,7 L 19,7 Q 21,7 21,9 L 21,18 Q 21,20 19,20 L 5,20 Q 3,20 3,18 Z</Geometry>
+  <Geometry x:Key="ReaderFile">M 6,3 L 14,3 L 19,8 L 19,20 Q 19,21 18,21 L 6,21 Q 5,21 5,20 L 5,4 Q 5,3 6,3 M 14,3 L 14,8 L 19,8 M 9,12 L 15,12 M 9,16 L 15,16</Geometry>
+  <Geometry x:Key="ReaderLibrary">M 4,4 L 4,20 M 9,4 L 9,20 M 14,5 L 19,4 L 22,19 L 17,20 Z</Geometry>
+  <Geometry x:Key="ReaderType">M 4,6 L 17,6 M 10.5,6 L 10.5,21 M 5,21 L 16,21 M 17,12 L 20,12 M 18.5,12 L 18.5,21</Geometry>
+  <Geometry x:Key="ReaderOutline">M 4,5 L 6,5 M 10,5 L 20,5 M 4,12 L 6,12 M 10,12 L 18,12 M 4,19 L 6,19 M 10,19 L 20,19</Geometry>
+  <Geometry x:Key="ReaderFocus">M 9,4 L 4,4 L 4,9 M 15,4 L 20,4 L 20,9 M 4,15 L 4,20 L 9,20 M 15,20 L 20,20 L 20,15</Geometry>
+  <local:ReaderIndentConverter x:Key="ReaderIndent"/>
+  <Style x:Key="ReaderAction" TargetType="Button" BasedOn="{StaticResource IconButton}"><Setter Property="Margin" Value="2,0"/><Setter Property="Foreground" Value="{DynamicResource Ink}"/></Style>
+  <Style x:Key="ReaderTreeItem" TargetType="TreeViewItem">
+   <Setter Property="Foreground" Value="{DynamicResource Ink}"/><Setter Property="Background" Value="Transparent"/>
+   <Setter Property="FocusVisualStyle" Value="{x:Null}"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="TreeViewItem">
+    <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="16"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+     <ToggleButton x:Name="Expander" IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}" Focusable="False" Width="16" Height="32" Background="Transparent" BorderThickness="0">
+      <ToggleButton.Template><ControlTemplate TargetType="ToggleButton"><Border Background="Transparent"><local:Glyph x:Name="Chevron" Data="{StaticResource IconChevron}" Width="10" Height="10" Foreground="{DynamicResource Muted}" RenderTransformOrigin="0.5,0.5"><local:Glyph.RenderTransform><RotateTransform Angle="-90"/></local:Glyph.RenderTransform></local:Glyph></Border><ControlTemplate.Triggers><Trigger Property="IsChecked" Value="True"><Setter TargetName="Chevron" Property="RenderTransform"><Setter.Value><RotateTransform Angle="0"/></Setter.Value></Setter></Trigger></ControlTemplate.Triggers></ControlTemplate></ToggleButton.Template>
+     </ToggleButton>
+     <Border x:Name="Row" Grid.Column="1" CornerRadius="7" Background="Transparent" Padding="7,7" Margin="0,1"><ContentPresenter x:Name="PART_Header" ContentSource="Header" HorizontalAlignment="Stretch"/></Border>
+     <ItemsPresenter x:Name="ItemsHost" Grid.Row="1" Grid.Column="1" Visibility="Collapsed"/>
+    </Grid>
+    <ControlTemplate.Triggers>
+     <Trigger Property="IsExpanded" Value="True"><Setter TargetName="ItemsHost" Property="Visibility" Value="Visible"/></Trigger>
+     <Trigger Property="HasItems" Value="False"><Setter TargetName="Expander" Property="Visibility" Value="Hidden"/></Trigger>
+     <Trigger SourceName="Row" Property="IsMouseOver" Value="True"><Setter TargetName="Row" Property="Background" Value="{DynamicResource Yellow}"/></Trigger>
+     <Trigger Property="IsSelected" Value="True"><Setter TargetName="Row" Property="Background" Value="{DynamicResource AccentSoft}"/><Setter Property="Foreground" Value="{DynamicResource Ink}"/></Trigger>
+    </ControlTemplate.Triggers>
+   </ControlTemplate></Setter.Value></Setter>
+  </Style>
+  <HierarchicalDataTemplate DataType="{x:Type local:ReadingNode}" ItemsSource="{Binding Children}" ItemContainerStyle="{StaticResource ReaderTreeItem}">
+   <DockPanel ToolTip="{Binding Path}">
+    <local:Glyph Width="15" Height="15" Margin="0,0,8,0" VerticalAlignment="Center" Foreground="{DynamicResource Muted}"><local:Glyph.Style><Style TargetType="local:Glyph"><Setter Property="Data" Value="{StaticResource ReaderFile}"/><Style.Triggers><DataTrigger Binding="{Binding Directory}" Value="True"><Setter Property="Data" Value="{StaticResource ReaderFolder}"/></DataTrigger><DataTrigger Binding="{Binding Placeholder}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers></Style></local:Glyph.Style></local:Glyph>
+    <TextBlock Text="{Binding Label}" FontSize="12" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" VerticalAlignment="Center"/>
+   </DockPanel>
+  </HierarchicalDataTemplate>
+  <Style x:Key="ReaderOutlineItem" TargetType="ListBoxItem">
+   <Setter Property="Foreground" Value="{DynamicResource Muted}"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem"><Border x:Name="Row" CornerRadius="7" Background="Transparent" Padding="10,9" Margin="0,2"><ContentPresenter/></Border><ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Row" Property="Background" Value="{DynamicResource Yellow}"/></Trigger><Trigger Property="IsSelected" Value="True"><Setter TargetName="Row" Property="Background" Value="{DynamicResource AccentSoft}"/><Setter Property="Foreground" Value="{DynamicResource Accent}"/><Setter Property="FontWeight" Value="SemiBold"/></Trigger></ControlTemplate.Triggers></ControlTemplate></Setter.Value></Setter>
+  </Style>
+  <Style x:Key="ReadingItem" TargetType="ListBoxItem">
+   <Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="Focusable" Value="False"/>
+   <Setter Property="Padding" Value="0"/><Setter Property="Margin" Value="0"/>
+   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem"><ContentPresenter/></ControlTemplate></Setter.Value></Setter>
+  </Style>
+ </UserControl.Resources>
+ <Grid x:Name="ReaderShell" Margin="0,0,3,0">
+  <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+  <DockPanel x:Name="ReaderToolbar" Margin="0">
+   <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+    <Button Content="{StaticResource ReaderType}" Style="{StaticResource ReaderAction}" Click="Settings_Click" ToolTip="字号与排版" AutomationProperties.Name="字号与排版"/>
+    <Button Content="{StaticResource ReaderOutline}" Style="{StaticResource ReaderAction}" Click="Outline_Click" ToolTip="目录" AutomationProperties.Name="目录"/>
+    <Button Content="{StaticResource ReaderFocus}" x:Name="FocusButton" Style="{StaticResource ReaderAction}" Click="Focus_Click" ToolTip="专注阅读 · F11" AutomationProperties.Name="专注阅读"/>
+    <Button Content="{StaticResource ReaderFile}" Style="{StaticResource ReaderAction}" Click="Open_Click" ToolTip="打开文件 · Ctrl+O" AutomationProperties.Name="打开文件"/>
+   </StackPanel>
+   <Button Content="{StaticResource ReaderLibrary}" Style="{StaticResource ReaderAction}" Click="Library_Click" ToolTip="书库" AutomationProperties.Name="书库" DockPanel.Dock="Left"/>
+   <TextBlock Text="{Binding DocumentName}" FontSize="14" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="10,0"/>
+  </DockPanel>
+  <Grid Grid.Row="2" x:Name="ReadingLayout">
+   <Grid.ColumnDefinitions><ColumnDefinition x:Name="LibraryColumn" Width="260"/><ColumnDefinition Width="*"/><ColumnDefinition x:Name="OutlineColumn" Width="210"/></Grid.ColumnDefinitions>
+   <Border x:Name="LibraryPanel" Background="{DynamicResource Sidebar}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="12" Margin="16,0,10,0" Padding="10">
+    <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+     <DockPanel Margin="4,0,0,10">
+      <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+       <Button Content="{StaticResource ReaderFolder}" Style="{StaticResource MiniIconButton}" Click="Folder_Click" ToolTip="添加文件夹 · Ctrl+Shift+O" AutomationProperties.Name="添加文件夹"/>
+       <Button Content="{StaticResource IconRefresh}" Style="{StaticResource MiniIconButton}" Click="Refresh_Click" ToolTip="刷新" AutomationProperties.Name="刷新"/>
+       <Button Content="{StaticResource IconDelete}" Style="{StaticResource MiniIconButton}" Click="Remove_Click" ToolTip="移除来源" AutomationProperties.Name="移除来源"/>
+      </StackPanel>
+      <TextBlock Text="书库" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"/>
+     </DockPanel>
+     <TextBox x:Name="NameFilter" Grid.Row="1" Tag="文件名" TextChanged="NameFilter_Changed" Margin="0,0,0,10" Padding="8,7" FontSize="12" ToolTip="筛选已展开目录中的文件名 · Ctrl+K"/>
+     <TreeView x:Name="SourceTree" Grid.Row="2" ItemsSource="{Binding Sources}" Background="Transparent" BorderThickness="0" Foreground="{DynamicResource Ink}" SelectedItemChanged="Source_Selected" TreeViewItem.Expanded="Source_Expanded" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+      <TreeView.ItemContainerStyle><StaticResource ResourceKey="ReaderTreeItem"/></TreeView.ItemContainerStyle>
+     </TreeView>
+     <ListBox x:Name="NameMatches" Grid.Row="2" Visibility="Collapsed" SelectionChanged="NameMatches_Selected" ScrollViewer.HorizontalScrollBarVisibility="Disabled"><ListBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Label}" ToolTip="{Binding Path}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" FontSize="12"/></DataTemplate></ListBox.ItemTemplate></ListBox>
+
+    </Grid>
+   </Border>
+   <Grid Grid.Column="1">
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+    <Border x:Name="SnapshotBanner" Background="{DynamicResource AccentSoft}" Padding="14,9" Visibility="Collapsed"><DockPanel><Button Content="{StaticResource IconRefresh}" DockPanel.Dock="Right" Click="Reload_Click" Style="{StaticResource MiniIconButton}" ToolTip="重新读取" AutomationProperties.Name="重新读取"/><TextBlock Text="正在显示本地快照，磁盘文件暂不可用。" FontSize="12" VerticalAlignment="Center"/></DockPanel></Border>
+    <ListBox x:Name="Pages" Grid.Row="1" ItemsSource="{Binding Pieces}" ItemContainerStyle="{StaticResource ReadingItem}" Background="Transparent" BorderThickness="0" Padding="20,10,17,16" ScrollViewer.CanContentScroll="True" ScrollViewer.HorizontalScrollBarVisibility="Disabled" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" VirtualizingPanel.ScrollUnit="Pixel" VirtualizingPanel.CacheLength="1,2" VirtualizingPanel.CacheLengthUnit="Page" local:SmoothScroll.Enabled="True" ScrollViewer.ScrollChanged="Pages_ScrollChanged" local:ReadingText.LinkRequested="Link_Requested">
+     <ListBox.ItemTemplate><DataTemplate><local:ReadingText Piece="{Binding}" TextSize="{Binding FontSizeValue, ElementName=ReaderRoot}" Leading="{Binding LeadingValue, ElementName=ReaderRoot}" Serif="{Binding SerifValue, ElementName=ReaderRoot}" MaxWidth="{Binding WidthValue, ElementName=ReaderRoot}" HorizontalAlignment="Stretch"/></DataTemplate></ListBox.ItemTemplate>
+    </ListBox>
+    <StackPanel x:Name="Welcome" Grid.Row="1" VerticalAlignment="Center" HorizontalAlignment="Center" Margin="28" MaxWidth="420">
+     <TextBlock Text="阅读" FontSize="28" Margin="0,0,0,20" HorizontalAlignment="Center"/>
+     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"><Button Content="{StaticResource ReaderFile}" Style="{StaticResource ReaderAction}" Click="Open_Click" ToolTip="打开文件" AutomationProperties.Name="打开文件"/><Button Content="{StaticResource ReaderFolder}" Style="{StaticResource ReaderAction}" Click="Folder_Click" ToolTip="添加文件夹" AutomationProperties.Name="添加文件夹"/></StackPanel>
+    </StackPanel>
+   </Grid>
+   <Border x:Name="InspectorPanel" Grid.Column="2" Background="{DynamicResource Sidebar}" BorderBrush="{DynamicResource Line}" BorderThickness="1" CornerRadius="12" Margin="10,0,16,0" Padding="12,12,12,10">
+    <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+     <DockPanel Margin="0,0,0,12">
+      <Button Content="{StaticResource IconClose}" DockPanel.Dock="Right" Style="{StaticResource MiniIconButton}" Click="InspectorClose_Click" ToolTip="关闭侧面板" AutomationProperties.Name="关闭阅读侧面板"/>
+      <StackPanel Orientation="Horizontal"><Button Content="{StaticResource ReaderOutline}" Style="{StaticResource ReaderAction}" Click="InspectorOutline_Click" ToolTip="目录" AutomationProperties.Name="侧面板目录"/><Button Content="{StaticResource ReaderType}" Style="{StaticResource ReaderAction}" Click="InspectorTypography_Click" ToolTip="排版" AutomationProperties.Name="侧面板排版"/></StackPanel>
+     </DockPanel>
+     <Grid x:Name="OutlinePanel" Grid.Row="1">
+      <DockPanel><TextBlock DockPanel.Dock="Top" Text="目录" FontSize="12" Foreground="{DynamicResource Muted}" Margin="8,0,0,12"/>
+       <ListBox x:Name="OutlineList" ItemsSource="{Binding Outline}" ItemContainerStyle="{StaticResource ReaderOutlineItem}" SelectionChanged="Outline_Selected" Background="Transparent" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" VirtualizingPanel.VirtualizationMode="Recycling"><ListBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding Title}" Margin="{Binding Level, Converter={StaticResource ReaderIndent}}" FontSize="12" TextTrimming="CharacterEllipsis" MaxHeight="42" ToolTip="{Binding Title}"/></DataTemplate></ListBox.ItemTemplate></ListBox>
+      </DockPanel>
+     </Grid>
+     <ScrollViewer x:Name="SettingsPanel" Grid.Row="1" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+      <StackPanel Margin="8,0,8,8">
+       <TextBlock Text="排版" FontSize="12" Foreground="{DynamicResource Muted}" Margin="0,0,0,22"/>
+       <DockPanel><TextBlock Text="字号"/><TextBlock Text="{Binding Value, ElementName=SizeSlider, StringFormat={}{0:0}}" Foreground="{DynamicResource Muted}" HorizontalAlignment="Right"/></DockPanel>
+       <Slider x:Name="SizeSlider" Minimum="14" Maximum="28" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="Typography_Changed" Margin="0,10,0,22"/>
+       <DockPanel><TextBlock Text="行距"/><TextBlock Text="{Binding Value, ElementName=LeadingSlider, StringFormat={}{0:0.00}}" Foreground="{DynamicResource Muted}" HorizontalAlignment="Right"/></DockPanel>
+       <Slider x:Name="LeadingSlider" Minimum="1.4" Maximum="2.4" TickFrequency="0.05" IsSnapToTickEnabled="True" ValueChanged="Typography_Changed" Margin="0,10,0,22"/>
+       <DockPanel><TextBlock Text="行宽"/><TextBlock Text="{Binding Value, ElementName=WidthSlider, StringFormat={}{0:0}}" Foreground="{DynamicResource Muted}" HorizontalAlignment="Right"/></DockPanel>
+       <Slider x:Name="WidthSlider" Minimum="520" Maximum="1040" TickFrequency="40" IsSnapToTickEnabled="True" ValueChanged="Typography_Changed" Margin="0,10,0,22"/>
+       <CheckBox x:Name="SerifCheck" Content="宋体正文" Click="Typography_Click" Margin="0,0,0,18"/>
+       <CheckBox x:Name="SnapshotCheck" Content="最近文档快照" Click="Snapshot_Click" Margin="0,0,0,20"/>
+       <StackPanel Orientation="Horizontal"><Button Content="{StaticResource IconCopy}" Style="{StaticResource ReaderAction}" Click="Copy_Click" ToolTip="复制全文" AutomationProperties.Name="复制全文"/><Button Content="{StaticResource IconDelete}" Style="{StaticResource ReaderAction}" Click="Clear_Click" ToolTip="清除阅读记录" AutomationProperties.Name="清除阅读记录"/></StackPanel>
+      </StackPanel>
+     </ScrollViewer>
+    </Grid>
+   </Border>
+  </Grid>
+  <DockPanel Grid.Row="3" Margin="24,8,24,12"><TextBlock Text="{Binding ProgressLabel}" DockPanel.Dock="Right" FontSize="11" Foreground="{DynamicResource Muted}"/><TextBlock Text="{Binding Status}" FontSize="11" Foreground="{DynamicResource Muted}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" Margin="0,0,12,0"/></DockPanel>
+  <Border x:Name="DropHint" Grid.RowSpan="4" Visibility="Collapsed" Background="{DynamicResource AccentSoft}" BorderBrush="{DynamicResource Accent}" BorderThickness="2" CornerRadius="12" Margin="12" IsHitTestVisible="False"><TextBlock Text="释放以添加阅读来源" FontSize="22" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+ </Grid>
+</UserControl>
