@@ -243,6 +243,26 @@ await Test("Recovery retains valid backup on next save and deletion scrubs index
     }
     finally { Directory.Delete(root, true); }
 });
+await Test("Application tray preference defaults on and retains a valid opt-out backup", async () =>
+{
+    var root = Path.Combine(Environment.CurrentDirectory, "artifacts", "Reflection-tests-" + Guid.NewGuid());
+    var store = new LocalStore(root);
+    try
+    {
+        Check((await store.LoadApplicationPreferencesAsync()).CloseToTray);
+        var path = Path.Combine(root, "application.json");
+        await File.WriteAllTextAsync(path, "{}");
+        Check((await store.LoadApplicationPreferencesAsync()).CloseToTray);
+        await store.SaveApplicationPreferencesAsync(new(CloseToTray: false));
+        await store.SaveApplicationPreferencesAsync(new(CloseToTray: true));
+        await File.WriteAllTextAsync(path, "{broken");
+        Check(!(await store.LoadApplicationPreferencesAsync()).CloseToTray && store.RecoveryNotice is not null);
+        await store.SaveApplicationPreferencesAsync(new(CloseToTray: true));
+        File.Delete(path);
+        Check(!(await store.LoadApplicationPreferencesAsync()).CloseToTray);
+    }
+    finally { Directory.Delete(root, true); }
+});
 await Test("Missing index is reconstructed from conversations", async () =>
 {
     var root = Path.Combine(Environment.CurrentDirectory, "artifacts", "Reflection-tests-" + Guid.NewGuid()); var store = new LocalStore(root);

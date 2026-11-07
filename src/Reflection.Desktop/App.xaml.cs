@@ -25,41 +25,58 @@ public partial class App : Application
         base.OnStartup(e);
         ThemeManager.Apply("light");
         var smoke = e.Args.Contains("--smoke");
+        var traySmoke = smoke && e.Args.Contains("--tray-only");
+        var activationProbe = smoke && e.Args.Contains("--tray-activate");
         var output = Environment.GetEnvironmentVariable("REFLECTION_SMOKE_DIR") ?? Path.Combine(Environment.CurrentDirectory, "artifacts", "screenshots");
         try
         {
             var data = LocalStore.ResolveRoot();
             Directory.CreateDirectory(data);
+            var pipeName = InstanceActivation.PipeName(data);
             try { instanceLock = new FileStream(Path.Combine(data, ".instance.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
-            catch (IOException) { if (!smoke) await ShowStartupNoticeAsync("应用已在运行", "请切换到已有的 Reflection 窗口。"); Shutdown(2); return; }
+            catch (IOException ex) when ((ex.HResult & 0xffff) is 32 or 33)
+            {
+                if ((!smoke || activationProbe) && await InstanceActivation.TryActivateAsync(pipeName)) { Shutdown(); return; }
+                if (!smoke) await ShowStartupNoticeAsync("应用已在运行", "请从系统托盘打开 Reflection，或切换到已有窗口。");
+                Shutdown(2); return;
+            }
+            if (activationProbe) { Shutdown(2); return; }
             if (smoke && e.Args.Contains("--workspace-only"))
             {
                 var seed = new LocalStore(data);
                 var chat = new Conversation { Title = "已有历史" }; chat.Messages.Add(new() { Role = "user", Content = "startup fixture" });
                 await seed.SaveConversationAsync(chat);
             }
-            var startupSettings = await new LocalStore(data).LoadSettingsAsync();
+            var startupStore = new LocalStore(data);
+            var startupSettings = await startupStore.LoadSettingsAsync();
             ThemeManager.Apply(startupSettings.Theme);
+            if (!smoke || traySmoke) await InitializeTrayAsync(startupStore);
             var window = new MainWindow(); MainWindow = window;
             if (smoke) { window.WindowStartupLocation = WindowStartupLocation.Manual; window.Left = -20000; window.Top = -20000; window.ShowInTaskbar = false; window.ShowActivated = false; }
             window.Show();
+            if (!smoke || traySmoke) ListenForActivation(pipeName);
             if (!smoke) return;
             Directory.CreateDirectory(output);
             await window.WaitInitializedAsync();
             window.VerifyStartupChrome();
             await window.VM.DiscoveryTask;
+            if (traySmoke)
+            {
+                await VerifyTrayAsync(window, output, e.Args.Contains("--tray-disabled"));
+                return;
+            }
             var initial = Process.GetCurrentProcess(); initial.Refresh();
             var startupWorkingSet = initial.WorkingSet64 / 1048576.0;
             var startupPrivateBytes = initial.PrivateMemorySize64 / 1048576.0;
             if (e.Args.Contains("--workspace-only"))
             {
-                window = await window.VerifyWorkspaceIsolationAsync(output, e.Args.Contains("--slow-discovery")); window.Close(); return;
+                window = await window.VerifyWorkspaceIsolationAsync(output, e.Args.Contains("--slow-discovery")); window.RequestExit(); return;
             }
             if (e.Args.Contains("--reader-only"))
             {
                 await window.VerifyReaderAsync(output);
                 await File.WriteAllTextAsync(Path.Combine(output, "smoke-result.txt"), "PASS: focused reader and virtual gallery regression");
-                window.Close(); return;
+                window.RequestExit(); return;
             }
             await FormRegression.VerifyAsync(window, output);
             await window.VerifyOverlaysAsync(output);
@@ -137,11 +154,11 @@ public partial class App : Application
                     await window.VM.NewChatAsync();
                     window.VM.Draft = "close during generation";
                     var pending = window.VM.SendAsync(); await Task.Delay(100);
-                    window.Close(); await releaseImageImport(); await Task.WhenAll(background, pending);
+                    window.RequestExit(); await releaseImageImport(); await Task.WhenAll(background, pending);
                 }
                 finally { await releaseImageImport(); }
             }
-            else window.Close();
+            else window.RequestExit();
         }
         catch (Exception ex)
         {
@@ -190,5 +207,10 @@ public partial class App : Application
         image.Render(drawing);
         var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(image)); using var file = File.Create(path); encoder.Save(file);
     }
-    protected override void OnExit(ExitEventArgs e) { instanceLock?.Dispose(); base.OnExit(e); }
+    protected override void OnExit(ExitEventArgs e)
+    {
+        ReleaseTray();
+        instanceLock?.Dispose();
+        base.OnExit(e);
+    }
 }

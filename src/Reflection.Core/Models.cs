@@ -158,6 +158,8 @@ public sealed class CharacterCard
     [JsonIgnore] public string OpeningLabel => OpeningRole == "user" ? "我" : "对方";
     public override string ToString() => Name;
 }
+public sealed record ApplicationPreferences(bool CloseToTray = true);
+
 public sealed class AppSettings
 {
     public string Theme { get; set; } = "light";

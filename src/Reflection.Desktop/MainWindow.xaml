@@ -46,7 +46,7 @@
    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" shell:WindowChrome.IsHitTestVisibleInChrome="True">
     <TextBlock x:Name="PrivateModeIndicator" Text="隐私模式" Visibility="Collapsed" FontSize="11" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" Margin="0,0,12,0"/><Button Style="{StaticResource CaptionButton}" ToolTip="最小化" AutomationProperties.Name="最小化" Content="{StaticResource IconMinimize}" Click="Minimize_Click"/>
     <Button Style="{StaticResource CaptionButton}" ToolTip="最大化或还原" AutomationProperties.Name="最大化或还原" Content="{StaticResource IconMaximize}" Click="Maximize_Click"/>
-    <Button Style="{StaticResource CaptionButton}" ToolTip="关闭" AutomationProperties.Name="关闭" Content="{StaticResource IconClose}" Click="Close_Click"/>
+    <Button x:Name="CloseWindowButton" Style="{StaticResource CaptionButton}" ToolTip="关闭" AutomationProperties.Name="关闭" Content="{StaticResource IconClose}" Click="Close_Click"/>
    </StackPanel>
   </Grid>
   <Grid Grid.Row="1" Grid.Column="2">
@@ -173,6 +173,11 @@
    <ScrollViewer x:Name="SettingsPage" Margin="0,0,3,0" Grid.Row="1" Visibility="Collapsed" VerticalScrollBarVisibility="Auto"><StackPanel x:Name="SettingsCanvas" Margin="40,12,40,36" MaxWidth="1200">
     <TextBlock Text="设置" FontSize="26" FontWeight="SemiBold" Margin="0,0,0,24"/>
     <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition x:Name="SettingsAsideColumn" Width="300"/></Grid.ColumnDefinitions><StackPanel>
+     <Border Style="{StaticResource PaperPanel}" Margin="0,0,0,20"><StackPanel>
+      <TextBlock Text="窗口行为" FontSize="18" FontWeight="SemiBold"/>
+      <CheckBox x:Name="CloseToTrayPreference" Content="关闭窗口时保留在托盘" Margin="0,12,0,0" Click="CloseToTrayPreference_Click"/>
+      <TextBlock Text="开启后，单击托盘图标恢复窗口，右键菜单可退出 Reflection。" TextWrapping="Wrap" FontSize="12" Foreground="{DynamicResource Muted}" Margin="0,8,0,0"/>
+     </StackPanel></Border>
      <Border Style="{StaticResource PaperPanel}" Margin="0,0,0,20"><StackPanel>
     <DockPanel><Button Style="{StaticResource IconButton}" ToolTip="检测连接" AutomationProperties.Name="检测连接" DockPanel.Dock="Right" Content="{StaticResource IconRefresh}" Click="Discover_Click"/><TextBlock Text="本地服务" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center"/></DockPanel><TextBlock Text="启动时检测已启用地址；开启自动发现后，每 30 秒刷新一次。" FontSize="12" Foreground="{DynamicResource Muted}" Margin="0,10,0,16"/>
     <ItemsControl x:Name="ConfiguredServices"><ItemsControl.ItemTemplate><DataTemplate><Border Background="{DynamicResource ToneF8F8F3}" CornerRadius="12" Padding="18" Margin="0,0,0,10"><DockPanel><StackPanel DockPanel.Dock="Right" Orientation="Horizontal"><Button Style="{StaticResource IconButton}" ToolTip="编辑" AutomationProperties.Name="编辑" Content="{StaticResource IconEdit}" Click="EditService_Click" Margin="0,0,6,0" VerticalAlignment="Center"/><Button Style="{StaticResource IconButton}" ToolTip="移除" AutomationProperties.Name="移除" Content="{StaticResource IconClose}" VerticalAlignment="Center" Click="DeleteService_Click"/></StackPanel><StackPanel><TextBlock Text="{Binding Name}" FontWeight="SemiBold"/><TextBlock Text="{Binding BaseUrl}" FontSize="13" Foreground="{DynamicResource Muted}" Margin="0,7,0,0"/><TextBlock Text="{Binding EnabledLabel}" FontSize="12" Foreground="{DynamicResource Muted}" Margin="0,5,0,0"/></StackPanel></DockPanel></Border></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
