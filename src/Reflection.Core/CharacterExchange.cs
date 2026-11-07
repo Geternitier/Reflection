@@ -29,14 +29,25 @@ public static class CharacterExchange
             Greeting = Get("first_mes") is { Length: > 0 } greeting ? greeting : Get("greeting"), OpeningRole = openingRole, Image = image
         };
     }
-    public static string Export(CharacterCard card) => JsonSerializer.Serialize(new
+    public static async Task<string> ExportAsync(CharacterCard card, CancellationToken ct = default)
     {
-        spec = "chara_card_v2", spec_version = "2.0", data = new
+        var portable = ConversationOperations.Snapshot(card)!;
+        if (portable.Image is { } image && image.AssetId is not null)
+            portable.Image = new() { Mime = image.Mime, Data = await (image.Store ?? throw new IOException("图片未绑定工作区。")).Base64Async(image.AssetId, ct).ConfigureAwait(false) };
+        return await Task.Run(() => Export(portable), ct).ConfigureAwait(false);
+    }
+    public static string Export(CharacterCard card)
+    {
+        if (card.Image is { AssetId: not null, Data.Length: 0 }) throw new ArgumentException("图片资产导出需要使用异步入口。");
+        return JsonSerializer.Serialize(new
         {
-            name = card.Name, description = card.Description, personality = "", scenario = card.Setting ?? "", first_mes = card.Greeting,
-            mes_example = "", system_prompt = card.SystemPrompt, post_history_instructions = "", creator_notes = "",
-            alternate_greetings = Array.Empty<string>(), tags = Array.Empty<string>(), creator = "Reflection", character_version = "1.0",
-            extensions = new { reflection = new { opening_role = card.OpeningRole == "user" ? "user" : "assistant", image = card.Image } }
-        }
-    }, LocalStore.Json);
+            spec = "chara_card_v2", spec_version = "2.0", data = new
+            {
+                name = card.Name, description = card.Description, personality = "", scenario = card.Setting ?? "", first_mes = card.Greeting,
+                mes_example = "", system_prompt = card.SystemPrompt, post_history_instructions = "", creator_notes = "",
+                alternate_greetings = Array.Empty<string>(), tags = Array.Empty<string>(), creator = "Reflection", character_version = "1.0",
+                extensions = new { reflection = new { opening_role = card.OpeningRole == "user" ? "user" : "assistant", image = card.Image is null ? null : new { mime = card.Image.Mime, data = card.Image.Data } } }
+            }
+        }, LocalStore.Json);
+    }
 }

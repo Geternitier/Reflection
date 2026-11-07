@@ -33,10 +33,10 @@ public partial class MainWindow
             throw new InvalidOperationException("Image drag formats were classified incorrectly");
 
         ShowPage("chat"); VM.Current.Attachments.Clear(); VM.Draft = "keep this draft";
-        if (!ReceiveComposerDrop(fileDrop) || !ReceiveComposerDrop(bitmapDrop) || VM.Current.Attachments.Count != 2 || VM.Draft != "keep this draft")
+        if (!await ReceiveComposerDrop(fileDrop) || !await ReceiveComposerDrop(bitmapDrop) || VM.Current.Attachments.Count != 2 || VM.Draft != "keep this draft")
             throw new InvalidOperationException("Composer image drop replaced text or lost images");
-        ReceiveComposerDrop(fileDrop); ReceiveComposerDrop(fileDrop);
-        if (ReceiveComposerDrop(fileDrop) || VM.Current.Attachments.Count != 4)
+        await ReceiveComposerDrop(fileDrop); await ReceiveComposerDrop(fileDrop);
+        if (await ReceiveComposerDrop(fileDrop) || VM.Current.Attachments.Count != 4)
             throw new InvalidOperationException("Image drop exceeded the attachment limit");
         await Task.Delay(260); UpdateLayout(); App.Capture(this, Path.Combine(output, "composer-drop.png"));
         VM.Current.Attachments.Clear(); VM.Draft = "";

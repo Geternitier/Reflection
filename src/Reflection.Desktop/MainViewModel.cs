@@ -11,9 +11,10 @@ using Reflection.Core;
 
 namespace Reflection.Desktop;
 
-public sealed class MainViewModel : Observable, IDisposable
+public sealed partial class MainViewModel : Observable, IDisposable
 {
     public LocalStore Store { get; }
+    public ImagePipeline Images { get; }
     private readonly InferenceClient inference = new();
     private readonly CancellationTokenSource lifetime = new();
     private sealed class GenerationRun(Conversation chat, ModelOption model, AppSettings settings, CancellationTokenSource cancel, string activity)
@@ -24,6 +25,7 @@ public sealed class MainViewModel : Observable, IDisposable
         public CancellationTokenSource Cancel { get; } = cancel;
         public string Activity { get; } = activity;
         public string Status { get; set; } = "";
+        public string ImageNotice { get; set; } = "";
         public TaskCompletionSource Finished { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
     private readonly Dictionary<Guid, GenerationRun> runs = [];
@@ -102,7 +104,7 @@ public sealed class MainViewModel : Observable, IDisposable
     }
     private void SetRunStatus(GenerationRun run, string text)
     {
-        run.Status = text;
+        run.Status = string.IsNullOrEmpty(run.ImageNotice) ? text : text + " · " + run.ImageNotice;
         if (ReferenceEquals(Current, run.Chat)) Raise(nameof(Status));
     }
     private void ScrollRun(GenerationRun run) { if (ReferenceEquals(Current, run.Chat)) ScrollRequested?.Invoke(); }
@@ -128,6 +130,7 @@ public sealed class MainViewModel : Observable, IDisposable
     public MainViewModel(string? dataRoot = null)
     {
         Store = new(dataRoot ?? LocalStore.ResolveRoot());
+        Images = new ImagePipeline(Store.Images);
         Hook(current);
         History = CollectionViewSource.GetDefaultView(Conversations);
         History.Filter = item => item is ConversationSummary chat && (chat.DisplayTitle.Contains(Search, StringComparison.OrdinalIgnoreCase) || chat.Title.Contains(Search, StringComparison.OrdinalIgnoreCase) || chat.Preview.Contains(Search, StringComparison.OrdinalIgnoreCase));
@@ -230,6 +233,7 @@ public sealed class MainViewModel : Observable, IDisposable
     }
     public async Task OpenAsync(ConversationSummary summary)
     {
+        await CancelImageImportsAsync();
         await navigation.WaitAsync();
         try
         {
@@ -252,6 +256,7 @@ public sealed class MainViewModel : Observable, IDisposable
     }
     public async Task NewChatAsync(CharacterCard? character = null)
     {
+        await CancelImageImportsAsync();
         await navigation.WaitAsync();
         try
         {
@@ -270,6 +275,7 @@ public sealed class MainViewModel : Observable, IDisposable
     }
     public async Task SendAsync(bool regenerate = false, bool replyOnly = false)
     {
+        if (!await WaitImageImportsAsync()) return;
         if (loading) return;
         if (Busy) { CurrentRun?.Cancel.Cancel(); return; }
         if (SelectedModel is null) { Status = "尚未选择可用模型。请启动本地服务，然后在设置中检测连接。"; return; }
@@ -319,7 +325,7 @@ public sealed class MainViewModel : Observable, IDisposable
             var instruction = existing.Length > 0 ? "请把下面的草稿改写成一条更清楚、可以直接发送的消息。只输出改写结果。\n\n" + existing : "请根据以上对话，起草我接下来可以发送的一条消息。只输出消息正文。";
             SetRunStatus(run, "正在起草下一条消息…");
             var watch = Stopwatch.StartNew(); long painted = 0;
-            await foreach (var delta in inference.StreamAsync(model, run.Chat.Messages.ToArray(), guide, run.Settings, run.Cancel.Token, model.Info, instruction))
+            await foreach (var delta in inference.StreamAsync(model, run.Chat.Messages.ToArray(), guide, run.Settings, run.Cancel.Token, model.Info, instruction, ImageProgress(run)))
             {
                 raw.Append(delta.Text); thoughts.Append(delta.Thinking);
                 if (raw.Length + thoughts.Length > 500_000) throw new IOException("草稿达到输出上限。");
@@ -443,7 +449,7 @@ public sealed class MainViewModel : Observable, IDisposable
         Current.Draft = Draft;
         if (!IsUnused() || Conversations.Any(x => x.Id == Current.Id)) await SaveCurrentAsync();
     }
-    public void Dispose() { lifetime.Cancel(); foreach (var run in runs.Values.ToArray()) run.Cancel.Cancel(); inference.Dispose(); }
+    public void Dispose() { lifetime.Cancel(); foreach (var run in runs.Values.ToArray()) run.Cancel.Cancel(); inference.Dispose(); Images.Dispose(); }
     private async Task CompleteAsync()
     {
         var run = BeginRun("chat"); var chat = run.Chat; var model = run.Model;
@@ -469,7 +475,7 @@ public sealed class MainViewModel : Observable, IDisposable
             await EnsureModelInfoAsync(run.Model);
             SetRunStatus(run, continuation is null ? $"{run.Model.Service.Name} 正在思考…" : "正在接着写…"); ScrollRun(run);
             var history = continuation ?? run.Chat.Messages.Where(x => x != answer).ToArray();
-            await foreach (var delta in inference.StreamAsync(run.Model, history, SystemFor(run), run.Settings, run.Cancel.Token, run.Model.Info, continuation is null ? null : Prompting.ContinueCue))
+            await foreach (var delta in inference.StreamAsync(run.Model, history, SystemFor(run), run.Settings, run.Cancel.Token, run.Model.Info, continuation is null ? null : Prompting.ContinueCue, ImageProgress(run)))
             {
                 raw.Append(delta.Text); thoughts.Append(delta.Thinking);
                 if (prefix.Length + raw.Length + thoughts.Length > 500_000) throw new IOException("回复已达到 50 万字符上限，已停止生成。");

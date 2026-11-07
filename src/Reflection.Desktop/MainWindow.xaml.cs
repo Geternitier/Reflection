@@ -43,7 +43,7 @@ public partial class MainWindow : Window
         Closed += (_, _) => { ThemeManager.Changed -= RefreshWindowAppearance; VM.Dispose(); };
         Closing += OnClosing;
         SizeChanged += (_, _) => { StopAutoScroll(); CloseChoices(); if (ActualWidth < 1100) sidebarOpen = false; UpdateResponsiveLayout(); UpdateOverlaySize(); };
-        PreviewKeyDown += (_, e) => { if (switchingWorkspace) { e.Handled = true; return; } if (AutoScrollActive) { StopAutoScroll(); if (e.Key == Key.Escape) { e.Handled = true; return; } } if (ChoiceOpen) { if (e.Key == Key.Escape) { CloseChoices(); e.Handled = true; } return; } if (HandleOverlayKey(e)) return; if (e.Key == Key.N && Keyboard.Modifiers == ModifierKeys.Control) { NewChat_Click(this, new()); e.Handled = true; } if (e.Key == Key.Escape && currentPage != "reader") { if (VM.Busy) VM.Stop(); else if (sidebarOpen && ActualWidth < 1100) SetSidebar(false); } };
+        PreviewKeyDown += (_, e) => { if (switchingWorkspace || savingClose) { e.Handled = true; return; } if (AutoScrollActive) { StopAutoScroll(); if (e.Key == Key.Escape) { e.Handled = true; return; } } if (ChoiceOpen) { if (e.Key == Key.Escape) { CloseChoices(); e.Handled = true; } return; } if (HandleOverlayKey(e)) return; if (e.Key == Key.N && Keyboard.Modifiers == ModifierKeys.Control) { NewChat_Click(this, new()); e.Handled = true; } if (e.Key == Key.Escape && currentPage != "reader") { if (VM.Busy) VM.Stop(); else if (sidebarOpen && ActualWidth < 1100) SetSidebar(false); } };
     }
     internal async Task VerifyChromeAsync(string output)
     {
@@ -193,28 +193,37 @@ public partial class MainWindow : Window
     {
         if (switchingWorkspace) { e.Cancel = true; return; }
         if (closeReady) return;
+        characterSaveCancellation?.Cancel();
         CloseChoices();
         while (OverlayOpen) CompleteOverlay(false);
         e.Cancel = true;
         if (savingClose) return;
-        savingClose = true;
+        savingClose = true; WorkspaceRoot.IsHitTestVisible = false;
         try
         {
+            if (characterSaveCompleted is { } pendingCharacter) await pendingCharacter.Task;
+            await CharacterEditor.CancelImageWorkAsync();
+            await VM.CancelImageImportsAsync();
             await VM.StopAllAsync();
             await VM.PersistDraftAsync();
             await ReaderPage.SaveAndStopAsync();
+            await VM.Images.DrainAsync();
+            await VM.CollectImagesAsync();
+            await VM.Images.DisposeAsync();
             closeReady = true; _ = Dispatcher.BeginInvoke(new Action(Close));
         }
-        catch (Exception ex) { savingClose = false; VM.Status = "关闭前保存失败：" + ex.Message; }
+        catch (Exception ex) { savingClose = false; WorkspaceRoot.IsHitTestVisible = true; VM.Status = "关闭前保存失败：" + ex.Message; }
     }
     private async Task Run(Func<Task> action)
     {
         try { await action(); }
+        catch (OperationCanceledException) { VM.Status = "操作已取消"; }
         catch (Exception ex) { VM.Status = "操作未完成：" + ex.Message; }
     }
     internal void ShowPage(string name, bool animate = true)
     {
         var changing = name != currentPage;
+        if (currentPage == "editor" && name != "editor") CharacterEditor.CancelImageWork();
         StopAutoScroll(); CloseChoices();
         ChatPage.Visibility = name == "chat" ? Visibility.Visible : Visibility.Collapsed;
         CardsRoot.Visibility = name == "cards" ? Visibility.Visible : Visibility.Collapsed;
@@ -285,13 +294,19 @@ public partial class MainWindow : Window
         }
         if (e.Key == Key.Enter && !Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)) { e.Handled = true; Send_Click(sender, new()); }
     }
-    private void Composer_Pasting(object sender, DataObjectPastingEventArgs e)
+    private async void Composer_Pasting(object sender, DataObjectPastingEventArgs e)
     {
-        if (e.FormatToApply != DataFormats.Bitmap && e.FormatToApply != DataFormats.Dib) return;
+        if (e.FormatToApply != DataFormats.Bitmap && e.FormatToApply != DataFormats.Dib && e.FormatToApply != DataFormats.FileDrop) return;
         e.CancelCommand();
-        if (!VM.Idle || Clipboard.GetImage() is not BitmapSource image) return;
-        try { VM.AddAttachment(ImageCodec.Encode(image)); }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException) { VM.Status = ex.Message; }
+        if (!VM.Idle || savingClose || switchingWorkspace) return;
+        if (VM.AvailableImageSlots == 0) { VM.Status = "一次最多 4 张图片"; return; }
+        try
+        {
+            var data = e.DataObject;
+            if (!data.GetDataPresent(DataFormats.FileDrop) && Clipboard.GetImage() is BitmapSource bitmap) data = new DataObject(DataFormats.Bitmap, bitmap);
+            await ReceiveComposerDrop(data);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException or InvalidOperationException or System.Runtime.InteropServices.COMException) { VM.Status = ex.Message; }
     }
     private void Messages_ScrollChanged(object sender, ScrollChangedEventArgs e)
     {
@@ -389,10 +404,10 @@ public partial class MainWindow : Window
     });
     private async void AddImage_Click(object sender, RoutedEventArgs e) => await Run(async () =>
     {
-        if (!VM.Idle) return;
+        if (!VM.Idle || savingClose || switchingWorkspace) return;
+        if (VM.AvailableImageSlots == 0) { VM.Status = "一次最多 4 张图片"; return; }
         var paths = await FileDialogs.PickAsync(this, "添加图片", new[] { ".png", ".jpg", ".jpeg", ".webp", ".bmp" }, multiple: true);
-        if (paths is null) return;
-        foreach (var file in paths) AddImageFile(file);
+        if (paths is not null) await ReceiveComposerDrop(new DataObject(DataFormats.FileDrop, paths));
     });
     private static bool IsInside(FrameworkElement target, DragEventArgs e)
     {
@@ -410,7 +425,7 @@ public partial class MainWindow : Window
         }
         var composer = currentPage == "chat" && IsInside(ComposerPanel, e);
         var editor = currentPage == "editor" && !savingCharacter;
-        var image = VM.Idle && (composer || editor) && (!composer || VM.Current.Attachments.Count < 4) && ImageDrop.CanRead(e.Data);
+        var image = VM.Idle && (composer || editor) && (!composer || VM.AvailableImageSlots > 0) && ImageDrop.CanRead(e.Data);
         ComposerDropHint.Visibility = image && composer ? Visibility.Visible : Visibility.Collapsed;
         CharacterEditor.SetDropHighlight(image && editor);
         if (!composer && !editor) return;
@@ -433,36 +448,44 @@ public partial class MainWindow : Window
         }
         else if (currentPage == "chat" && IsInside(ComposerPanel, e))
         {
-            e.Handled = true; ReceiveComposerDrop(e.Data);
+            e.Handled = true; await ReceiveComposerDrop(e.Data);
         }
     }
-    internal bool ReceiveComposerDrop(IDataObject data)
+    internal Task<bool> ReceiveComposerDrop(IDataObject data)
     {
-        if (!VM.Idle) return false;
-        if (VM.Current.Attachments.Count >= 4) { VM.Status = "一次最多 4 张图片"; return false; }
-        var before = VM.Current.Attachments.Count;
+        if (!VM.Idle || savingClose || switchingWorkspace) return Task.FromResult(false);
+        if (VM.AvailableImageSlots == 0) { VM.Status = "一次最多 4 张图片"; return Task.FromResult(false); }
         try
         {
-            foreach (var image in ImageDrop.Read(data))
-            {
-                VM.AddAttachment(image);
-                if (VM.Current.Attachments.Count >= 4) break;
-            }
+            var inputs = ImageDrop.Capture(data, VM.AvailableImageSlots);
+            return inputs.Count == 0 ? Task.FromResult(false) : VM.ImportImagesAsync(inputs);
         }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException or UnauthorizedAccessException or InvalidOperationException) { VM.Status = ex.Message; }
-        return VM.Current.Attachments.Count > before;
-    }
-    private void AddImageFile(string path)
-    {
-        try { VM.AddAttachment(ImageCodec.FromFile(path)); }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException or UnauthorizedAccessException or InvalidOperationException) { VM.Status = ex.Message; }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException or UnauthorizedAccessException or InvalidOperationException)
+        { VM.Status = ex.Message; return Task.FromResult(false); }
     }
     private void RemoveAttachment_Click(object sender, RoutedEventArgs e) { if (((FrameworkElement)sender).DataContext is ChatImage image) VM.RemoveAttachment(image); }
+    private async void ReuseImage_Click(object sender, RoutedEventArgs e)
+    {
+        if (savingClose || switchingWorkspace || !VM.Idle || ((FrameworkElement)sender).DataContext is not ChatImage image) return;
+        if (VM.AvailableImageSlots == 0) { VM.Status = "一次最多 4 张图片"; return; }
+        var owner = VM; var chat = VM.Current;
+        await Run(async () =>
+        {
+            // Old embedded images are normalized through the same asset pipeline.
+            var normalized = await owner.Images.NormalizeAsync(image.Snapshot(), CancellationToken.None);
+            if (!ReferenceEquals(VM, owner) || !ReferenceEquals(owner.Current, chat) || savingClose || switchingWorkspace) return;
+            if (owner.AvailableImageSlots > 0) owner.AddAttachment(normalized.Snapshot());
+        });
+    }
     private async void ZoomImage_Click(object sender, RoutedEventArgs e)
     {
         if (((FrameworkElement)sender).DataContext is not ChatImage image) return;
-        if (new Base64ImageConverter().Convert(image, typeof(ImageSource), "1280", CultureInfo.InvariantCulture) is not ImageSource source) return;
-        await ShowImageAsync(source);
+        var owner = VM; var page = currentPage;
+        await Run(async () =>
+        {
+            var source = await owner.Images.DisplayAsync(image.Snapshot(), 2560, true, CancellationToken.None);
+            if (ReferenceEquals(VM, owner) && currentPage == page && !savingClose && !switchingWorkspace) await ShowImageAsync(source);
+        });
     }
     private async void Reason_Click(object sender, RoutedEventArgs e) { ReasonToggle.IsChecked = false; await Run(() => VM.SetReasonAsync((string)((FrameworkElement)sender).Tag)); }
     private void OpenCard_Click(object sender, RoutedEventArgs e)
@@ -480,30 +503,29 @@ public partial class MainWindow : Window
     private void CancelCharacter_Requested(object? sender, EventArgs e)
     {
         if (savingCharacter) return;
+        CharacterEditor.CancelImageWork();
         if (CharacterEditor.Original is { } original) { VM.DetailCard = original; ShowPage("detail"); }
         else ShowPage("cards");
     }
     private async void SaveCharacter_Requested(object? sender, EventArgs e) => await SaveCharacterAsync();
     private async Task<bool> SaveCharacterAsync()
     {
-        if (savingCharacter || !VM.Idle || !CharacterEditor.TryBuildResult() || CharacterEditor.Result is not { } edited) return false;
-        savingCharacter = true; CharacterEditor.IsEnabled = false;
+        if (savingCharacter || switchingWorkspace || savingClose || !VM.Idle || !CharacterEditor.TryBuildResult() || CharacterEditor.Result is not { } edited) return false;
+        BeginCharacterSave(); CharacterEditor.IsEnabled = false;
         try
         {
             var original = CharacterEditor.Original;
-            var index = original is null ? -1 : VM.Characters.IndexOf(original);
-            if (original is not null && index < 0) throw new InvalidOperationException("该角色已被删除。");
-            var updated = VM.Characters.ToList();
-            if (index >= 0) updated[index] = edited; else updated.Add(edited);
-            // Persist before changing the live collection; a failed save leaves the draft editable.
-            await VM.Store.SaveCharactersAsync(updated);
-            if (index >= 0) VM.Characters[index] = edited; else VM.Characters.Add(edited);
-            if (original is not null) await VM.ApplyCharacterUpdateAsync(edited);
+            await CommitCharacterLibraryAsync(original, edited);
             VM.DetailCard = edited; VM.Status = "角色已保存";
+            if (original is not null)
+            {
+                try { await VM.ApplyCharacterUpdateAsync(edited); }
+                catch (Exception ex) { VM.Status = "角色已保存，但部分会话同步失败：" + ex.Message + "。可重新编辑保存以重试同步。"; }
+            }
             ShowPage("detail"); CharacterDetailPage.ScrollToTop(); return true;
         }
         catch (Exception ex) { CharacterEditor.ErrorText.Text = "保存失败：" + ex.Message; return false; }
-        finally { savingCharacter = false; CharacterEditor.IsEnabled = true; }
+        finally { EndCharacterSave(); CharacterEditor.IsEnabled = true; }
     }
     private async void UseCard_Click(object sender, RoutedEventArgs e)
     {
@@ -515,28 +537,47 @@ public partial class MainWindow : Window
     {
         if (VM.Busy || savingCharacter || VM.DetailCard is not CharacterCard card) return;
         if (!await ConfirmAsync("删除角色", $"删除「{card.Name}」？已有对话和角色快照会保留。")) return;
-        await Run(async () => { var snapshot = VM.Current.CharacterSnapshot; var characterId = VM.Current.CharacterId; VM.Characters.Remove(card); if (VM.SelectedCharacter == card) VM.SelectedCharacter = VM.Characters.FirstOrDefault(); VM.DetailCard = VM.Characters.FirstOrDefault(); VM.RestoreCharacter(snapshot, characterId); await VM.SaveCharactersAsync(); ShowPage("cards"); });
+        if (savingCharacter || switchingWorkspace || savingClose) return;
+        BeginCharacterSave();
+        try { await Run(async () => { await CommitCharacterLibraryAsync(card, null); ShowPage("cards"); }); }
+        finally { EndCharacterSave(); }
     }
-    private async void ImportCard_Click(object sender, RoutedEventArgs e) => await Run(async () =>
+    private async void ImportCard_Click(object sender, RoutedEventArgs e)
     {
-        if (VM.Busy || savingCharacter) return;
-        var paths = await FileDialogs.PickAsync(this, "导入角色卡", new[] { ".json" }); if (paths is null) return;
-        if (new FileInfo(paths[0]).Length > 8_000_000) throw new ArgumentException("角色卡不能超过 8 MB。");
-        var card = CharacterExchange.Import(await File.ReadAllTextAsync(paths[0]));
-        if (card.Image is not null)
+        if (VM.Busy || savingCharacter || switchingWorkspace || savingClose) return;
+        BeginCharacterSave();
+        var ct = characterSaveCancellation!.Token;
+        try
         {
-            using var imageStream = new MemoryStream(Convert.FromBase64String(card.Image.Data));
-            var cropped = await CharacterImageCropper.ShowAsync(this, ImageCodec.Decode(imageStream, 2560));
-            if (cropped is null) return;
-            card.Image = cropped;
+            await Run(async () =>
+            {
+                var paths = await FileDialogs.PickAsync(this, "导入角色卡", new[] { ".json" }); if (paths is null) return;
+                ct.ThrowIfCancellationRequested();
+                if (new FileInfo(paths[0]).Length > 8_000_000) throw new ArgumentException("角色卡不能超过 8 MB。");
+                var json = await File.ReadAllTextAsync(paths[0], ct);
+                var card = await Task.Run(() => CharacterExchange.Import(json), ct);
+                if (card.Image is not null)
+                {
+                    var original = await VM.Images.NormalizeAsync(card.Image, ct);
+                    var cropped = await CharacterImageCropper.ShowAsync(this, original, ct);
+                    if (cropped is null) return;
+                    card.Image = cropped;
+                }
+                ct.ThrowIfCancellationRequested();
+                await CommitCharacterLibraryAsync(null, card);
+                VM.DetailCard = card; VM.Status = "角色卡已导入"; ShowPage("detail");
+            });
         }
-        VM.Characters.Add(card); VM.DetailCard = card; await VM.SaveCharactersAsync(); VM.Status = "角色卡已导入"; ShowPage("detail");
-    });
+        finally { EndCharacterSave(); }
+    }
     private async void ExportDetail_Click(object sender, RoutedEventArgs e) => await Run(async () =>
     {
         if (VM.DetailCard is not CharacterCard card) return;
         var paths = await FileDialogs.PickAsync(this, "导出角色卡", new[] { ".json" }, save: true, suggested: "character.json");
-        if (paths is not null) { await File.WriteAllTextAsync(paths[0], CharacterExchange.Export(card)); VM.Status = "角色卡已导出"; }
+        if (paths is not null)
+        {
+            await File.WriteAllTextAsync(paths[0], await CharacterExchange.ExportAsync(card)); VM.Status = "角色卡已导出";
+        }
     });
     private void RefreshSettings()
     {

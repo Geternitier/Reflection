@@ -66,6 +66,8 @@ public partial class App : Application
             await window.VerifyChromeAsync(output);
             await window.VerifyStudioAsync(output);
             await window.VerifyCharacterFlowAsync(output);
+            await window.VerifyCharacterSaveFailuresAsync(output);
+            await window.VerifyImageAssetsAsync(output);
             await window.VerifyComponentsAsync(output);
             await window.VerifyMathAndFilesAsync(output);
             await window.VerifyAppearanceAndTablesAsync(output);
@@ -127,12 +129,17 @@ public partial class App : Application
             await File.WriteAllTextAsync(Path.Combine(output, "smoke-result.txt"), $"PASS: startup, discovery, service form viewport/edit/validation/persistence, inline confirmations/editors/image viewer, Escape/backdrop cancel, service removal, three pages, normalized icons, component DPI renders, anchored model/reason/protocol selection and actual selection binding, independent concurrent conversations/background drafts/stop isolation/stable history, live character save across active/background/disk chats/prompt update and original opening preservation, persisted light/dark themes and hot formula/table repaint/no speaker labels/rounded window/narrow table layout, 3:4 portrait gallery/crop selection pixels/crop cancel/minimum crop layout/character history names/persisted collapsible history/compact scrollbar range, nested character wheel/middle auto scroll direction and Escape/navigation exit, live heading/bold/italic before completion/automatic thinking expansion and collapse/stop preservation, formula rendering/fallback/source export/reload, system file dialog requests/cancel/card file round trip/source export, fluid gallery, card/detail navigation, inline character create/edit/cancel/persistence, file/bitmap drops, desktop/overlay drawer, compact layout{(e.Args.Contains("--smoke-chat") ? ", chat, regenerate, reload, edit, cancel, continuation, image edit, character snapshot" : "")}\nStartup working set: {startupWorkingSet:F1} MiB\nStartup private bytes: {startupPrivateBytes:F1} MiB\nAfter rendering working set: {process.WorkingSet64 / 1048576.0:F1} MiB\n{window.VM.Connection}");
             if (e.Args.Contains("--smoke-close"))
             {
-                window.VM.Draft = "navigation slow background close";
-                var background = window.VM.SendAsync(); await Task.Delay(100);
-                await window.VM.NewChatAsync();
-                window.VM.Draft = "close during generation";
-                var pending = window.VM.SendAsync(); await Task.Delay(100);
-                window.Close(); await Task.WhenAll(background, pending);
+                var releaseImageImport = await window.PrepareClosingImageImportAsync(output);
+                try
+                {
+                    window.VM.Draft = "navigation slow background close";
+                    var background = window.VM.SendAsync(); await Task.Delay(100);
+                    await window.VM.NewChatAsync();
+                    window.VM.Draft = "close during generation";
+                    var pending = window.VM.SendAsync(); await Task.Delay(100);
+                    window.Close(); await releaseImageImport(); await Task.WhenAll(background, pending);
+                }
+                finally { await releaseImageImport(); }
             }
             else window.Close();
         }

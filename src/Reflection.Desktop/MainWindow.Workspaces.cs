@@ -29,14 +29,16 @@ public partial class MainWindow
     private async void WorkspaceMode_Click(object sender, RoutedEventArgs e) => await Run(async () => { await SwitchWorkspaceAsync(); });
     internal async Task<MainWindow?> SwitchWorkspaceAsync()
     {
-        if (!initialized || switchingWorkspace || savingClose) return null;
+        if (!initialized || switchingWorkspace || savingClose || savingCharacter) return null;
         if (currentPage == "editor" && !await ConfirmAsync("切换模式", "未保存的角色修改将被放弃。", "切换")) return null;
+        if (savingCharacter || savingClose || switchingWorkspace) return null;
         switchingWorkspace = true; StopAutoScroll(); CloseChoices();
         WorkspaceRoot.IsHitTestVisible = false; WorkspaceModeButton.IsEnabled = false;
         var timer = Stopwatch.StartNew(); var previous = VM; var oldReader = ReaderPage;
         MainViewModel? next = null;
         try
         {
+            await CharacterEditor.CancelImageWorkAsync(); await previous.CancelImageImportsAsync();
             await previous.StopAllAsync(); await previous.PersistDraftAsync(); await oldReader.PersistAsync();
             var profile = Profile.Other;
             if (!File.Exists(Path.Combine(profile.Root, "settings.json")))
@@ -65,12 +67,19 @@ public partial class MainWindow
             ThemeManager.Apply(VM.Settings.Theme); FormulaRasterCache.Clear();
             CharacterEditor.BeginEdit(null); TitleBox.Text = ""; followOutput = true;
             InitializeWorkspaceMode(); RefreshSettings(); ShowPage("cards", animate: false);
+            await previous.Images.DrainAsync();
+            await previous.CollectImagesAsync();
+            await previous.Images.DisposeAsync();
             previous.Dispose();
             await Dispatcher.InvokeAsync(UpdateLayout, DispatcherPriority.Loaded);
             LastWorkspaceSwitchMilliseconds = timer.Elapsed.TotalMilliseconds;
             return this;
         }
-        catch { if (!ReferenceEquals(VM, next)) next?.Dispose(); throw; }
+        catch
+        {
+            if (next is not null && !ReferenceEquals(VM, next)) { await next.Images.DisposeAsync(); next.Dispose(); }
+            throw;
+        }
         finally { WorkspaceRoot.IsHitTestVisible = true; WorkspaceModeButton.IsEnabled = true; switchingWorkspace = false; }
     }
 }

@@ -54,7 +54,19 @@ public sealed class ChatImage
 {
     public string Mime { get; set; } = "image/jpeg";
     public string Data { get; set; } = "";
+    public string? AssetId { get; set; }
+    public string? OriginalAssetId { get; set; }
+    public string? ThumbnailAssetId { get; set; }
+    public long EncodedLength { get; set; }
+    public ImageCrop? Crop { get; set; }
+    [JsonIgnore] public ImageAssetStore? Store { get; set; }
+    public ChatImage Snapshot() => new()
+    {
+        Mime = Mime, Data = Data, AssetId = AssetId, OriginalAssetId = OriginalAssetId,
+        ThumbnailAssetId = ThumbnailAssetId, EncodedLength = EncodedLength, Crop = Crop, Store = Store
+    };
 }
+public sealed record ImageCrop(double X, double Y, double Width, double Height);
 public sealed class ChatMessage : Observable
 {
     public string Role { get; set; } = "user";

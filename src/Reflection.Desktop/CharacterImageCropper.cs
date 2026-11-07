@@ -13,9 +13,16 @@ internal sealed class CharacterImageCropper : UserControl
     internal CropSurface Surface { get; }
     internal ChatImage? Result { get; private set; }
     internal Button ConfirmButton { get; }
-    internal CharacterImageCropper(MainWindow owner, BitmapSource image)
+    internal CharacterImageCropper(MainWindow owner, BitmapSource image, ChatImage? original = null, CancellationToken cancellationToken = default)
     {
         Width = 780; Height = 640; Surface = new CropSurface(image);
+        if (original?.Crop is { } crop) Surface.Select(new Rect(crop.X * image.PixelWidth, crop.Y * image.PixelHeight, crop.Width * image.PixelWidth, crop.Height * image.PixelHeight));
+        var cancelWork = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var retired = false;
+        Unloaded += (_, _) => { if (!retired) { retired = true; cancelWork.Cancel(); cancelWork.Dispose(); } };
+        var pipeline = owner.VM.Images;
+        var captured = image.IsFrozen ? image : image.CloneCurrentValue();
+        if (!captured.IsFrozen) captured.Freeze();
         var panel = new DockPanel { Margin = new Thickness(24) }; Content = panel;
         var heading = new StackPanel { Margin = new Thickness(0, 0, 0, 14) };
         heading.Children.Add(new TextBlock { Text = "裁剪角色图片", FontSize = 20 });
@@ -27,22 +34,40 @@ internal sealed class CharacterImageCropper : UserControl
         var cancel = new Button { Content = "取消", Margin = new Thickness(0, 0, 10, 0) };
         cancel.Click += (_, _) => owner.CompleteOverlay(false); buttons.Children.Add(cancel);
         ConfirmButton = new Button { Content = "使用裁剪", Style = (Style)owner.FindResource("Primary") };
-        ConfirmButton.Click += (_, _) =>
+        ConfirmButton.Click += async (_, _) =>
         {
-            try { Result = Surface.EncodeSelection(); owner.CompleteOverlay(true); }
+            ConfirmButton.IsEnabled = false;
+            var selection = Surface.Selection;
+            var crop = new ImageCrop(selection.X / image.PixelWidth, selection.Y / image.PixelHeight, selection.Width / image.PixelWidth, selection.Height / image.PixelHeight);
+            try
+            {
+                var source = original ?? await pipeline.ImportAsync(new(null, captured), cancelWork.Token);
+                var result = await pipeline.CropAsync(source, crop, cancelWork.Token);
+                if (!cancelWork.IsCancellationRequested && owner.IsOverlayContent(this))
+                { Result = result; owner.CompleteOverlay(true); }
+            }
+            catch (OperationCanceledException) { }
             catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or InvalidOperationException)
             { hint.Text = ex.Message; hint.SetResourceReference(TextBlock.ForegroundProperty, "Danger"); }
+            finally { ConfirmButton.IsEnabled = true; }
         };
         buttons.Children.Add(ConfirmButton); DockPanel.SetDock(buttons, Dock.Right); footer.Children.Add(buttons);
         footer.Children.Add(new TextBlock { Text = "图片比例 3:4", FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
         DockPanel.SetDock(footer, Dock.Bottom); panel.Children.Add(footer);
         panel.Children.Add(Surface);
     }
-    internal static async Task<ChatImage?> ShowAsync(MainWindow owner, BitmapSource source)
+    internal static async Task<ChatImage?> ShowAsync(MainWindow owner, ChatImage original, CancellationToken ct = default)
     {
-        var cropper = new CharacterImageCropper(owner, source);
+        var source = await owner.VM.Images.DisplayAsync(original, 2560, true, ct);
+        ct.ThrowIfCancellationRequested();
+        var cropper = new CharacterImageCropper(owner, source, original, ct);
+        using var registration = ct.Register(() => owner.Dispatcher.BeginInvoke(() =>
+        {
+            if (owner.IsOverlayContent(cropper)) owner.CompleteOverlay(false);
+        }));
         return await owner.ShowOverlayAsync(cropper, cropper.Surface) ? cropper.Result : null;
     }
+
 }
 
 internal sealed class CropSurface : FrameworkElement
@@ -137,16 +162,5 @@ internal sealed class CropSurface : FrameworkElement
         base.OnKeyDown(e); var step = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift) ? 10 : 1;
         var delta = e.Key switch { Key.Left => new Vector(-step, 0), Key.Right => new Vector(step, 0), Key.Up => new Vector(0, -step), Key.Down => new Vector(0, step), _ => new Vector() };
         if (delta.Length > 0) { Select(new Rect(Selection.TopLeft + delta, Selection.Size)); e.Handled = true; }
-    }
-    internal ChatImage EncodeSelection()
-    {
-        var rect = new Int32Rect(Math.Max(0, (int)Math.Floor(Selection.X)), Math.Max(0, (int)Math.Floor(Selection.Y)), Math.Max(1, (int)Math.Floor(Selection.Width)), Math.Max(1, (int)Math.Floor(Selection.Height)));
-        rect.Width = Math.Min(rect.Width, source.PixelWidth - rect.X); rect.Height = Math.Min(rect.Height, source.PixelHeight - rect.Y);
-        var crop = new CroppedBitmap(source, rect);
-        var unit = Math.Max(1, Math.Min(320, (int)Math.Floor(Math.Min(rect.Width / 3d, rect.Height / 4d))));
-        var visual = new DrawingVisual();
-        using (var dc = visual.RenderOpen()) dc.DrawImage(crop, new Rect(0, 0, unit * 3, unit * 4));
-        var target = new RenderTargetBitmap(unit * 3, unit * 4, 96, 96, PixelFormats.Pbgra32); target.Render(visual);
-        return ImageCodec.Encode(target);
     }
 }

@@ -507,6 +507,7 @@ await Test("Scroll trajectory is independent of callback frame rate", () =>
     Check(Math.Abs(At(60) - At(120)) < .01 && Math.Abs(At(60) - At(144)) < .01);
     return Task.CompletedTask;
 });
+await ImageRegressions.RunAsync(Test);
 Console.WriteLine($"\n{passed} tests passed.");
 static HttpResponseMessage Json(string value) => new(HttpStatusCode.OK) { Content = new StringContent(value, Encoding.UTF8, "application/json") };
 static HttpResponseMessage Stream(string value) => new(HttpStatusCode.OK) { Content = new StreamContent(new FragmentStream(Encoding.UTF8.GetBytes(value))) };

@@ -1,9 +1,7 @@
-﻿using System.Globalization;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
-using System.Windows.Media.Imaging;
 using Reflection.Core;
 
 namespace Reflection.Desktop;
@@ -11,6 +9,14 @@ namespace Reflection.Desktop;
 public partial class CharacterEditorView : UserControl
 {
     private ChatImage? image;
+    private CancellationTokenSource? imageCancellation;
+    private TaskCompletionSource? imageWorkCompleted;
+    internal void CancelImageWork() { imageCancellation?.Cancel(); }
+    internal async Task CancelImageWorkAsync()
+    {
+        var pending = imageWorkCompleted; CancelImageWork();
+        if (pending is not null) await pending.Task;
+    }
     internal CharacterCard? Original { get; private set; }
     internal CharacterCard? Result { get; private set; }
     internal ChatImage? DraftImage => image;
@@ -35,6 +41,7 @@ public partial class CharacterEditorView : UserControl
     }
     internal void BeginEdit(CharacterCard? original)
     {
+        CancelImageWork();
         Original = original; Result = null; ErrorText.Text = ""; SaveButton.IsEnabled = true;
         EditorTitle.Text = original is null ? "创建角色" : "编辑角色";
         NameField.Text = original?.Name ?? ""; DescriptionField.Text = original?.Description ?? "";
@@ -45,8 +52,7 @@ public partial class CharacterEditorView : UserControl
     }
     private void RefreshImage()
     {
-        var source = image is null ? null : new Base64ImageConverter().Convert(image, typeof(ImageSource), "640", CultureInfo.InvariantCulture) as ImageSource;
-        AvatarPreview.Background = source is null ? null : new ImageBrush(source) { Stretch = Stretch.UniformToFill };
+        AvatarPreview.Child = image is null ? null : new AssetImage { Picture = image, DecodeSize = 640, Stretch = Stretch.UniformToFill };
         CropCurrentButton.IsEnabled = image is not null;
         AvatarPlaceholder.Visibility = image is null ? Visibility.Visible : Visibility.Collapsed;
     }
@@ -54,33 +60,45 @@ public partial class CharacterEditorView : UserControl
     {
         AvatarDropZone.SetResourceReference(Border.BorderBrushProperty, active ? "Accent" : "Line");
     }
-    internal async Task<bool> ReceiveImageDropAsync(IDataObject data)
+    private async Task<bool> EditImageAsync(Func<MainWindow, CancellationToken, Task<ChatImage?>> work)
     {
+        if (Window.GetWindow(this) is not MainWindow owner) return false;
+        CancelImageWork();
+        var cancel = new CancellationTokenSource(); imageCancellation = cancel;
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously); imageWorkCompleted = completed;
+        SaveButton.IsEnabled = false;
         try
         {
-            BitmapSource? source = null;
-            if (data.GetDataPresent(DataFormats.FileDrop) && data.GetData(DataFormats.FileDrop) is string[] files && files.FirstOrDefault(ImageDrop.IsImageFile) is { } path)
-            {
-                if (new FileInfo(path).Length > 20_000_000) throw new ArgumentException("请选择小于 20 MB 的图片。");
-                using var stream = File.OpenRead(path); source = ImageCodec.Decode(stream, 2560);
-            }
-            else if (data.GetDataPresent(DataFormats.Bitmap) && data.GetData(DataFormats.Bitmap) is BitmapSource bitmap)
-            {
-                // Reuse the existing size validation/normalization for external bitmap sources.
-                var normalized = ImageCodec.Encode(bitmap);
-                using var stream = new MemoryStream(Convert.FromBase64String(normalized.Data)); source = ImageCodec.Decode(stream, 2560);
-            }
-            if (source is null) { ErrorText.Text = "请拖入支持的图片文件。"; return false; }
-            if (Window.GetWindow(this) is not MainWindow owner) return false;
-            var cropped = await CharacterImageCropper.ShowAsync(owner, source);
-            if (cropped is null) return false;
-            image = cropped; RefreshImage(); ErrorText.Text = ""; return true;
+            var result = await work(owner, cancel.Token);
+            cancel.Token.ThrowIfCancellationRequested();
+            if (result is null) return false;
+            image = result; RefreshImage(); ErrorText.Text = ""; return true;
         }
+        catch (OperationCanceledException) { return false; }
         catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException or InvalidOperationException or FormatException)
-        { ErrorText.Text = ex.Message; return false; }
+        { if (!cancel.IsCancellationRequested) ErrorText.Text = ex.Message; return false; }
+        finally
+        {
+            if (ReferenceEquals(imageCancellation, cancel)) { imageCancellation = null; imageWorkCompleted = null; SaveButton.IsEnabled = true; }
+            completed.TrySetResult(); cancel.Dispose();
+        }
+    }
+    internal Task<bool> ReceiveImageDropAsync(IDataObject data)
+    {
+        IReadOnlyList<ImageInput> inputs;
+        try { inputs = ImageDrop.Capture(data, 1); }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or NotSupportedException)
+        { ErrorText.Text = ex.Message; return Task.FromResult(false); }
+        if (inputs.Count == 0) { ErrorText.Text = "请拖入支持的图片文件。"; return Task.FromResult(false); }
+        return EditImageAsync(async (owner, ct) =>
+        {
+            var original = await owner.VM.Images.ImportAsync(inputs[0], ct);
+            return await CharacterImageCropper.ShowAsync(owner, original, ct);
+        });
     }
     internal bool TryBuildResult()
     {
+        if (imageWorkCompleted is not null) { ErrorText.Text = "请等待图片处理完成后保存。"; return false; }
         Result = null; ErrorText.Text = ""; InputValidation.SetHasError(NameField, false); InputValidation.SetHasError(SystemField, false);
         if (string.IsNullOrWhiteSpace(NameField.Text)) { Fail(NameField, "请填写角色名称。"); return false; }
         if (SystemField.Text.Trim().Length > 20000) { Fail(SystemField, "系统提示词不能超过 20000 字。"); return false; }
@@ -96,17 +114,14 @@ public partial class CharacterEditorView : UserControl
     }
     private async void RecropImage_Click(object sender, RoutedEventArgs e)
     {
-        if (image is null || Window.GetWindow(this) is not MainWindow owner) return;
-        try
+        if (image is not { } current) return;
+        await EditImageAsync(async (owner, ct) =>
         {
-            using var stream = new MemoryStream(Convert.FromBase64String(image.Data));
-            var cropped = await CharacterImageCropper.ShowAsync(owner, ImageCodec.Decode(stream, 2560));
-            if (cropped is not null) { image = cropped; RefreshImage(); ErrorText.Text = ""; }
-        }
-        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or InvalidOperationException or FormatException)
-        { ErrorText.Text = ex.Message; }
+            var original = await owner.VM.Images.NormalizeAsync(current, ct);
+            return await CharacterImageCropper.ShowAsync(owner, original, ct);
+        });
     }
-    private void RemoveImage_Click(object sender, RoutedEventArgs e) { image = null; RefreshImage(); }
+    private void RemoveImage_Click(object sender, RoutedEventArgs e) { CancelImageWork(); image = null; RefreshImage(); }
     private void Save_Click(object sender, RoutedEventArgs e) { if (TryBuildResult()) SaveRequested?.Invoke(this, EventArgs.Empty); }
     private void Cancel_Click(object sender, RoutedEventArgs e) => CancelRequested?.Invoke(this, EventArgs.Empty);
 }
