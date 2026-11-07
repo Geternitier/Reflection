@@ -50,7 +50,32 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(b'{"done":true}\n' if self.path == '/api/chat' else b'data: [DONE]\n\n'); self.wfile.flush()
 server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
 threading.Thread(target=server.serve_forever, daemon=True).start()
+
+def run_tray():
+    for disabled in (False, True):
+        run = root / 'artifacts' / ('smoke-tray-' + str(uuid.uuid4())[:8])
+        data = run / 'data'
+        data.mkdir(parents=True)
+        settings = {'services': [{'id': str(uuid.uuid4()), 'name': 'Tray fixture', 'baseUrl': f'http://127.0.0.1:{server.server_port}', 'protocol': 0, 'enabled': True}]}
+        (data / 'settings.json').write_text(json.dumps(settings), encoding='utf-8')
+        if disabled:
+            (data / 'application.json').write_text('{"closeToTray": false}', encoding='utf-8')
+        env = dict(os.environ, REFLECTION_DATA_DIR=str(data), REFLECTION_SMOKE_DIR=str(run))
+        app = root / 'src/Reflection.Desktop/bin/Release/net10.0-windows/Reflection.Desktop.exe'
+        args = ['--smoke', '--tray-only'] + (['--tray-disabled'] if disabled else [])
+        result = subprocess.run([str(app), *args], env=env, timeout=45, creationflags=subprocess.CREATE_NO_WINDOW)
+        error = run / 'smoke-error.txt'
+        if result.returncode or error.exists():
+            raise RuntimeError(error.read_text(encoding='utf-8') if error.exists() else str(result.returncode))
+        if not disabled:
+            chats = [json.loads(p.read_text(encoding='utf-8')) for p in (data / 'chats').glob('*.json')]
+            assert any(c.get('draft') == 'preserve draft on tray exit failure' for c in chats), 'Tray exit retry did not persist the draft'
+        print('tray', (run / 'smoke-result.txt').read_text(encoding='utf-8'), '\nResults:', run)
+
 try:
+    if '--tray-only' in sys.argv:
+        run_tray()
+        sys.exit(0)
     for name, protocol in [('ollama', 0), ('openai', 1), ('offline', 0), ('closing', 0)]:
         if '--workspace-only' in sys.argv:
             continue
@@ -89,5 +114,7 @@ try:
     if result.returncode or (run / 'smoke-error.txt').exists():
         raise RuntimeError((run / 'smoke-error.txt').read_text(encoding='utf-8') if (run / 'smoke-error.txt').exists() else str(result.returncode))
     print('workspace', (run / 'workspace-result.txt').read_text(encoding='utf-8'), '\nScreenshots:', run)
+    if '--workspace-only' not in sys.argv:
+        run_tray()
 finally:
     server.shutdown()

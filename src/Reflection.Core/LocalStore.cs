@@ -17,6 +17,9 @@ public sealed class LocalStore
     public static string ResolveRoot() => Environment.GetEnvironmentVariable("REFLECTION_DATA_DIR") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Reflection");
     public bool HasCharactersFile => File.Exists(Path.Combine(root, "characters.json"));
     public LocalStore(string root) { this.root = root; Images = new(root); Directory.CreateDirectory(Path.Combine(root, "chats")); }
+    public Task<ApplicationPreferences> LoadApplicationPreferencesAsync() =>
+        ReadAsync("application.json", () => new ApplicationPreferences());
+
     public async Task<AppSettings> LoadSettingsAsync()
     {
         var settings = await ReadAsync("settings.json", () => new AppSettings());
@@ -94,6 +97,12 @@ public sealed class LocalStore
         chat.Attachments ??= [];
         foreach (var message in chat.Messages) message.Images ??= [];
         return chat;
+    }
+    public async Task SaveApplicationPreferencesAsync(ApplicationPreferences value)
+    {
+        await gate.WaitAsync();
+        try { await WriteCore("application.json", value); }
+        finally { gate.Release(); }
     }
     public async Task SaveSettingsAsync(AppSettings value) { await gate.WaitAsync(); try { await WriteCore("settings.json", value); } finally { gate.Release(); } }
     public async Task SaveCharactersAsync(List<CharacterCard> value)

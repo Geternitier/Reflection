@@ -1,5 +1,4 @@
-﻿using System.ComponentModel;
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Text;
@@ -21,8 +20,6 @@ public partial class MainWindow : Window
     private bool followOutput = true;
     private bool initialized;
     private bool refreshingSettings;
-    private bool savingClose;
-    private bool closeReady;
     private bool sidebarOpen = true;
     private string currentPage = "cards";
     internal ScrollViewer CardsPage => SmoothScroll.Viewer(CharacterGallery)!;
@@ -39,9 +36,9 @@ public partial class MainWindow : Window
         OverlayContent.SizeChanged += (_, _) => OverlayContent.Clip = new RectangleGeometry(new Rect(0, 0, OverlayContent.ActualWidth, OverlayContent.ActualHeight), 16, 16);
         VM.ScrollRequested += RequestChatFollow;
         VM.ModelInfoChanged += OnModelInfoChanged;
-        Loaded += async (_, _) => await Run(async () => { await VM.InitializeAsync(waitForDiscovery: false); RefreshSettings(); initialized = true; WorkspaceModeButton.IsEnabled = true; });
-        Closed += (_, _) => { ThemeManager.Changed -= RefreshWindowAppearance; VM.Dispose(); };
-        Closing += OnClosing;
+        Loaded += InitializeWindow;
+        Closed += (_, _) => { ThemeManager.Changed -= RefreshWindowAppearance; ReaderPage.Retire(); VM.Dispose(); };
+        InitializeCloseBehavior();
         SizeChanged += (_, _) => { StopAutoScroll(); CloseChoices(); if (ActualWidth < 1100) sidebarOpen = false; UpdateResponsiveLayout(); UpdateOverlaySize(); };
         PreviewKeyDown += (_, e) => { if (switchingWorkspace || savingClose) { e.Handled = true; return; } if (AutoScrollActive) { StopAutoScroll(); if (e.Key == Key.Escape) { e.Handled = true; return; } } if (ChoiceOpen) { if (e.Key == Key.Escape) { CloseChoices(); e.Handled = true; } return; } if (HandleOverlayKey(e)) return; if (e.Key == Key.N && Keyboard.Modifiers == ModifierKeys.Control) { NewChat_Click(this, new()); e.Handled = true; } if (e.Key == Key.Escape && currentPage != "reader") { if (VM.Busy) VM.Stop(); else if (sidebarOpen && ActualWidth < 1100) SetSidebar(false); } };
     }
@@ -188,31 +185,17 @@ public partial class MainWindow : Window
         if (WindowState == WindowState.Maximized) SystemCommands.RestoreWindow(this);
         else SystemCommands.MaximizeWindow(this);
     }
-    private void Close_Click(object sender, RoutedEventArgs e) => Close();
-    private async void OnClosing(object? sender, CancelEventArgs e)
+    private void InitializeWindow(object sender, RoutedEventArgs e)
     {
-        if (switchingWorkspace) { e.Cancel = true; return; }
-        if (closeReady) return;
-        characterSaveCancellation?.Cancel();
-        CloseChoices();
-        while (OverlayOpen) CompleteOverlay(false);
-        e.Cancel = true;
-        if (savingClose) return;
-        savingClose = true; WorkspaceRoot.IsHitTestVisible = false;
-        try
+        Loaded -= InitializeWindow;
+        windowInitialization = Run(async () =>
         {
-            if (characterSaveCompleted is { } pendingCharacter) await pendingCharacter.Task;
-            await CharacterEditor.CancelImageWorkAsync();
-            await VM.CancelImageImportsAsync();
-            await VM.StopAllAsync();
-            await VM.PersistDraftAsync();
-            await ReaderPage.SaveAndStopAsync();
-            await VM.Images.DrainAsync();
-            await VM.CollectImagesAsync();
-            await VM.Images.DisposeAsync();
-            closeReady = true; _ = Dispatcher.BeginInvoke(new Action(Close));
-        }
-        catch (Exception ex) { savingClose = false; WorkspaceRoot.IsHitTestVisible = true; VM.Status = "关闭前保存失败：" + ex.Message; }
+            await VM.InitializeAsync(waitForDiscovery: false);
+            RefreshSettings();
+            initialized = true;
+            WorkspaceModeButton.IsEnabled = true;
+            if (DesktopApp.TrayNotice is { } notice) VM.Status = notice;
+        });
     }
     private async Task Run(Func<Task> action)
     {

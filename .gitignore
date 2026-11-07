@@ -52,6 +52,7 @@ __pycache__/
 /chats/
 /reader/
 /settings.json
+/application.json
 /characters.json
 /index.json
 .instance.lock

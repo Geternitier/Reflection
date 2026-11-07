@@ -81,7 +81,7 @@ public partial class ReaderView : UserControl, INotifyPropertyChanged
         {
             if (retired) return;
             if ((bool)e.NewValue) { suspended = false; await InitializeAsync(); UpdatePanels(); }
-            else { suspended = true; positionTimer.Stop(); typographyTimer.Stop(); filterTimer.Stop(); RememberPosition(); _ = SaveQuietlyAsync(); }
+            else { RememberPosition(); suspended = true; positionTimer.Stop(); typographyTimer.Stop(); filterTimer.Stop(); progressTimer.Stop(); _ = SaveQuietlyAsync(); }
         };
         PreviewKeyDown += KeyPressed;
     }
@@ -200,15 +200,16 @@ public partial class ReaderView : UserControl, INotifyPropertyChanged
         for (var i = 0; i < VisualTreeHelper.GetChildrenCount(node); i++) if (FindPanel(VisualTreeHelper.GetChild(node, i)) is { } child) return child;
         return null;
     }
-    private ReadingPosition Position()
+    private ReadingPosition Position() => RealizedPosition() ?? new();
+    private ReadingPosition? RealizedPosition()
     {
         var visible = Realized().Where(x => x.Top + x.Container.ActualHeight > 1).OrderBy(x => x.Top).FirstOrDefault();
-        return visible.Piece is null ? new() : new(visible.Piece.Offset, Math.Clamp(-visible.Top / visible.Container.ActualHeight, 0, 1));
+        return visible.Piece is null ? null : new(visible.Piece.Offset, Math.Clamp(-visible.Top / visible.Container.ActualHeight, 0, 1));
     }
     internal void RememberPosition()
     {
-        if (document is null || restoring) return;
-        state.Positions[document.Path] = Position();
+        if (document is null || restoring || suspended || RealizedPosition() is not { } position) return;
+        state.Positions[document.Path] = position;
         while (state.Positions.Count > 100) state.Positions.Remove(state.Positions.Keys.First());
     }
     private async Task RestorePositionAsync(ReadingPosition position)
@@ -248,10 +249,6 @@ public partial class ReaderView : UserControl, INotifyPropertyChanged
         if (!settingsReady) return;
         try { saving = store.SaveAsync(state); await saving; }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Status = "阅读设置保存失败：" + ex.Message; }
-    }
-    internal async Task SaveAndStopAsync()
-    {
-        await PersistAsync(); Retire();
     }
     internal async Task PersistAsync() { RememberPosition(); if (settingsReady) { saving = store.SaveAsync(state); await saving; } }
     internal void Retire() { retired = true; positionTimer.Stop(); typographyTimer.Stop(); filterTimer.Stop(); progressTimer.Stop(); lifetime.Cancel(); opening?.Cancel(); }
