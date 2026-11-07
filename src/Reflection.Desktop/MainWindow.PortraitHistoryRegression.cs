@@ -31,7 +31,7 @@ public partial class MainWindow
         App.Capture(this, Path.Combine(output, "character-crop.png"));
         cropper.ConfirmButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         if (!await pending || cropper.Result is null) throw new InvalidOperationException("Crop confirmation did not return an image");
-        using var stream = new MemoryStream(Convert.FromBase64String(cropper.Result.Data));
+        using var stream = new MemoryStream(await VM.Store.Images.ReadAsync(cropper.Result.AssetId!));
         var result = ImageCodec.Decode(stream, 1280);
         if (result.PixelWidth * 4 != result.PixelHeight * 3) throw new InvalidOperationException("Cropped image dimensions lost 3:4 ratio");
         var converted = new FormatConvertedBitmap(result, PixelFormats.Bgra32, null, 0); var sample = new byte[4];

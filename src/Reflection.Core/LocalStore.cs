@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Collections.Concurrent;
 
 namespace Reflection.Core;
 
@@ -9,12 +10,13 @@ public sealed class LocalStore
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private readonly string root;
     private readonly SemaphoreSlim gate = new(1, 1);
-    private readonly HashSet<string> recovered = new();
+    private readonly ConcurrentDictionary<string, byte> recovered = new();
     public string Root => root;
+    public ImageAssetStore Images { get; }
     public string? RecoveryNotice { get; private set; }
     public static string ResolveRoot() => Environment.GetEnvironmentVariable("REFLECTION_DATA_DIR") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Reflection");
     public bool HasCharactersFile => File.Exists(Path.Combine(root, "characters.json"));
-    public LocalStore(string root) { this.root = root; Directory.CreateDirectory(Path.Combine(root, "chats")); }
+    public LocalStore(string root) { this.root = root; Images = new(root); Directory.CreateDirectory(Path.Combine(root, "chats")); }
     public async Task<AppSettings> LoadSettingsAsync()
     {
         var settings = await ReadAsync("settings.json", () => new AppSettings());
@@ -23,7 +25,7 @@ public sealed class LocalStore
         settings.Reason = Prompting.NormalizeReason(settings.Reason);
         return settings;
     }
-    public Task<List<CharacterCard>> LoadCharactersAsync() => ReadAsync("characters.json", () => new List<CharacterCard>
+    public Task<List<CharacterCard>> LoadCharactersAsync() => ReadImagesAsync("characters.json", () => new List<CharacterCard>
     {
         new() { Name = "通用助手", Description = "思考、解答，让日常问题变简单。", SystemPrompt = "你是一位友好、严谨的助手。请用中文回答。" },
         new() { Name = "代码伙伴", Description = "一起拆解问题，写出清晰可靠的代码。", SystemPrompt = "你是一位严谨的软件工程师。用中文解释，提供简洁可靠的代码，指出关键假设。" },
@@ -87,21 +89,41 @@ public sealed class LocalStore
     }
     public async Task<Conversation> LoadConversationAsync(Guid id)
     {
-        var chat = await ReadAsync($"chats/{id}.json", () => new Conversation { Id = id });
+        var chat = await ReadImagesAsync($"chats/{id}.json", () => new Conversation { Id = id });
         chat.Messages ??= [];
         chat.Attachments ??= [];
         foreach (var message in chat.Messages) message.Images ??= [];
         return chat;
     }
     public async Task SaveSettingsAsync(AppSettings value) { await gate.WaitAsync(); try { await WriteCore("settings.json", value); } finally { gate.Release(); } }
-    public async Task SaveCharactersAsync(List<CharacterCard> value) { await gate.WaitAsync(); try { await WriteCore("characters.json", value); } finally { gate.Release(); } }
+    public async Task SaveCharactersAsync(List<CharacterCard> value)
+    {
+        var snapshot = value.Select(x => ConversationOperations.Snapshot(x)!).ToList();
+        await gate.WaitAsync();
+        try
+        {
+            await Task.Run(async () =>
+            {
+                foreach (var card in snapshot) if (card.Image is not null) card.Image = await Images.ExternalizeAsync(card.Image);
+                await WriteCore("characters.json", snapshot);
+            });
+        }
+        finally { gate.Release(); }
+    }
     public async Task SaveConversationAsync(Conversation value)
     {
         value = ConversationOperations.Snapshot(value);
         await gate.WaitAsync();
         try
         {
-            await WriteCore($"chats/{value.Id}.json", value);
+            await Task.Run(async () =>
+            {
+                if (value.CharacterSnapshot?.Image is { } picture) value.CharacterSnapshot.Image = await Images.ExternalizeAsync(picture);
+                for (var i = 0; i < value.Attachments.Count; i++) value.Attachments[i] = await Images.ExternalizeAsync(value.Attachments[i]);
+                foreach (var message in value.Messages)
+                    for (var i = 0; i < message.Images.Count; i++) message.Images[i] = await Images.ExternalizeAsync(message.Images[i]);
+                await WriteCore($"chats/{value.Id}.json", value);
+            });
             var index = await LoadIndexAsync();
             index.RemoveAll(x => x.Id == value.Id);
             index.Insert(0, new(value.Id, value.Title, value.UpdatedAt, Conversation.PreviewOf(value), value.CharacterSnapshot?.Name ?? ""));
@@ -124,13 +146,51 @@ public sealed class LocalStore
         }
         finally { gate.Release(); }
     }
+    private async Task<T> ReadImagesAsync<T>(string relative, Func<T> fallback)
+    {
+        var value = await ReadAsync(relative, fallback);
+        try { await Task.Run(() => BindImages(value)); return value; }
+        catch (IOException)
+        {
+            var path = Path.Combine(root, relative);
+            if (!File.Exists(path + ".bak")) throw;
+            var backup = await Deserialize<T>(path + ".bak");
+            await Task.Run(() => BindImages(backup));
+            recovered.TryAdd(path, 0); RecoveryNotice = "图片引用异常，已从上一版备份恢复，请检查最近的修改。";
+            return backup;
+        }
+    }
+    private void BindImages<T>(T value)
+    {
+        if (value is List<CharacterCard> cards)
+        {
+            foreach (var card in cards) if (card.Image is not null) Images.Attach(card.Image);
+        }
+        else if (value is Conversation chat)
+        {
+            chat.Messages ??= []; chat.Attachments ??= [];
+            if (chat.CharacterSnapshot?.Image is { } picture) Images.Attach(picture);
+            foreach (var image in chat.Attachments) Images.Attach(image);
+            foreach (var message in chat.Messages)
+            {
+                message.Images ??= [];
+                foreach (var image in message.Images) Images.Attach(image);
+            }
+        }
+    }
+    public async Task<int> CollectImageAssetsAsync(CancellationToken ct = default)
+    {
+        await gate.WaitAsync(ct);
+        try { return await Task.Run(() => Images.CollectUnusedAsync(root, ct), ct); }
+        finally { gate.Release(); }
+    }
     private async Task<T> ReadAsync<T>(string relative, Func<T> fallback)
     {
         var path = Path.Combine(root, relative);
         if (!File.Exists(path))
         {
             if (!File.Exists(path + ".bak")) return fallback();
-            var backup = await Deserialize<T>(path + ".bak"); recovered.Add(path);
+            var backup = await Deserialize<T>(path + ".bak"); recovered.TryAdd(path, 0);
             RecoveryNotice = "已从上一版备份恢复数据，请检查最近的修改。"; return backup;
         }
         try { return await Deserialize<T>(path); }
@@ -138,7 +198,7 @@ public sealed class LocalStore
         {
             if (File.Exists(path + ".bak"))
             {
-                var value = await Deserialize<T>(path + ".bak"); recovered.Add(path); RecoveryNotice = "已从上一版备份恢复数据，请检查最近的修改。"; return value;
+                var value = await Deserialize<T>(path + ".bak"); recovered.TryAdd(path, 0); RecoveryNotice = "已从上一版备份恢复数据，请检查最近的修改。"; return value;
             }
             throw new IOException($"数据文件损坏，请保留文件并从备份恢复：{path}");
         }
@@ -155,10 +215,10 @@ public sealed class LocalStore
         {
             await using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.Asynchronous | FileOptions.WriteThrough))
                 await JsonSerializer.SerializeAsync(stream, value, Json);
-            if (recovered.Contains(path))
+            if (recovered.ContainsKey(path))
             {
                 // The primary is corrupt: never rotate it over the valid backup.
-                File.Move(temp, path, true); recovered.Remove(path);
+                File.Move(temp, path, true); recovered.TryRemove(path, out _);
             }
             else if (File.Exists(path)) File.Replace(temp, path, path + ".bak");
             else File.Move(temp, path);

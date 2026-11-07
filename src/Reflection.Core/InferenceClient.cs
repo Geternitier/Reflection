@@ -112,10 +112,9 @@ public sealed class InferenceClient : IDisposable
         var ollama = model.Service.Protocol == ApiProtocol.Ollama;
         var list = new List<object>();
         if (!string.IsNullOrWhiteSpace(system)) list.Add(new { role = "system", content = system });
-        var selected = Trim(messages, system, settings.ContextCharacters - (extraUser?.Length ?? 0));
-        var images = selected.SelectMany(x => x.Images).ToArray();
-        if (images.Length > 16 || images.Sum(x => (long)x.Data.Length) > 12_000_000)
-            throw new ArgumentException("本轮图片上下文过大，请新建对话或减少图片（最多 16 张、12 MB 编码数据）。");
+        var selected = ImageContext.Select(messages, system, settings.ContextCharacters - (extraUser?.Length ?? 0)).Messages;
+        if (selected.Where(x => x.Role == "user").SelectMany(x => x.Images).Any(x => string.IsNullOrEmpty(x.Data)))
+            throw new ArgumentException("图片资产需要通过异步请求入口读取。");
         list.AddRange(selected.Select(x => ApiMessage(x, !ollama)));
         if (!string.IsNullOrWhiteSpace(extraUser)) list.Add(new { role = "user", content = extraUser });
         var payload = new Dictionary<string, object?> { ["model"] = model.Model, ["messages"] = list, ["stream"] = true };
@@ -134,12 +133,20 @@ public sealed class InferenceClient : IDisposable
         }
         return JsonSerializer.Serialize(payload);
     }
-    public async IAsyncEnumerable<StreamDelta> StreamAsync(ModelOption model, IEnumerable<ChatMessage> messages, string system, AppSettings settings, [EnumeratorCancellation] CancellationToken ct, ModelInfo? info = null, string? extraUser = null)
+    public static async Task<string> CreateBodyAsync(ModelOption model, IEnumerable<ChatMessage> messages, string system, AppSettings settings, ModelInfo? info = null, string? extraUser = null, CancellationToken ct = default, IProgress<ImageContextSelection>? progress = null)
+    {
+        var snapshot = ConversationOperations.Snapshot(new Conversation { Messages = new(messages) }).Messages;
+        var selected = await Task.Run(() => ImageContext.Select(snapshot, system, settings.ContextCharacters - (extraUser?.Length ?? 0)), ct).ConfigureAwait(false);
+        progress?.Report(selected);
+        var hydrated = await ImageContext.MaterializeAsync(selected, ct).ConfigureAwait(false);
+        return await Task.Run(() => CreateBody(model, hydrated, system, settings, info, extraUser), ct).ConfigureAwait(false);
+    }
+    public async IAsyncEnumerable<StreamDelta> StreamAsync(ModelOption model, IEnumerable<ChatMessage> messages, string system, AppSettings settings, [EnumeratorCancellation] CancellationToken ct, ModelInfo? info = null, string? extraUser = null, IProgress<ImageContextSelection>? progress = null)
     {
         var ollama = model.Service.Protocol == ApiProtocol.Ollama;
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct); deadline.CancelAfter(TimeSpan.FromMinutes(10));
         using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint(model.Service, ollama ? "api/chat" : "v1/chat/completions"))
-        { Content = new StringContent(CreateBody(model, messages, system, settings, info, extraUser), Encoding.UTF8, "application/json") };
+        { Content = new StringContent(await CreateBodyAsync(model, messages, system, settings, info, extraUser, deadline.Token, progress), Encoding.UTF8, "application/json") };
         using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
         if (!response.IsSuccessStatusCode) throw new HttpRequestException($"服务返回 HTTP {(int)response.StatusCode}（{response.ReasonPhrase}）。请检查模型是否加载及服务配置。");
         await using var stream = await response.Content.ReadAsStreamAsync(deadline.Token);
