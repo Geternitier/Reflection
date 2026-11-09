@@ -12,7 +12,7 @@
      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
      <Grid.ColumnDefinitions><ColumnDefinition x:Name="ImageColumn" Width="260"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
      <StackPanel x:Name="AvatarPanel" Margin="0,0,28,0">
-      <TextBlock Text="角色图片" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,10"/>
+      <TextBlock Text="角色封面" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,10"/>
       <local:PortraitFrame x:Name="AvatarDropZone" CornerRadius="14" Background="{DynamicResource ToneF0EDE5}" BorderBrush="{DynamicResource ToneDDD7CA}" BorderThickness="1" ClipToBounds="True">
        <Grid><Border x:Name="AvatarPreview" CornerRadius="14"/><StackPanel x:Name="AvatarPlaceholder" VerticalAlignment="Center" HorizontalAlignment="Center"><local:Glyph Data="{StaticResource IconImage}" Width="30" Height="30" Foreground="{DynamicResource Tone8B8170}" HorizontalAlignment="Center"/><TextBlock Text="拖入图片或选择文件" FontSize="12" Foreground="{DynamicResource Muted}" Margin="0,14,0,0"/></StackPanel></Grid>
       </local:PortraitFrame>
@@ -22,6 +22,16 @@
      <StackPanel x:Name="IdentityFields" Grid.Column="1">
       <Label Content="角色名称 *" Target="{Binding ElementName=NameField}" Padding="0" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,8"/>
       <TextBox x:Name="NameField" Tag="输入角色名称" MinHeight="42" AutomationProperties.Name="角色名称"/>
+      <TextBlock Text="对话头像" FontSize="12" FontWeight="SemiBold" Margin="0,20,0,8"/>
+      <DockPanel LastChildFill="True">
+       <ContentControl x:Name="ConversationAvatarPreview" Width="52" Height="52" Margin="0,0,10,0" VerticalAlignment="Top" Focusable="False"
+                       Template="{StaticResource RoundCharacterAvatar}" AutomationProperties.Name="对话头像预览"/>
+       <WrapPanel VerticalAlignment="Center">
+        <Button Content="选择头像" Click="PickAvatar_Click" Padding="10,6" FontSize="12"/>
+        <Button x:Name="CropAvatarButton" Content="从封面裁剪" Click="RecropAvatar_Click" Padding="10,6" FontSize="12"/>
+        <Button x:Name="RemoveAvatarButton" Content="移除头像" Click="RemoveAvatar_Click" Style="{StaticResource Quiet}" Padding="10,6" FontSize="12"/>
+       </WrapPanel>
+      </DockPanel>
       <Label Content="介绍" Target="{Binding ElementName=DescriptionField}" Padding="0" FontSize="12" FontWeight="SemiBold" Margin="0,20,0,8"/>
       <TextBox x:Name="DescriptionField" Tag="角色介绍" MinHeight="92" AcceptsReturn="True" TextWrapping="Wrap" VerticalContentAlignment="Top" VerticalScrollBarVisibility="Auto" AutomationProperties.Name="角色介绍"/>
      </StackPanel>

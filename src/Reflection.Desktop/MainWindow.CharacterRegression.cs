@@ -10,11 +10,20 @@ public partial class MainWindow
 {
     internal async Task VerifyCharacterFlowAsync(string output)
     {
-        async Task<bool> CropAsync(IDataObject data, bool accept = true)
+        async Task<bool> CropAsync(IDataObject data, bool accept = true, bool forAvatar = false)
         {
-            var pending = CharacterEditor.ReceiveImageDropAsync(data);
+            var pending = CharacterEditor.ReceiveImageDropAsync(data, forAvatar);
             await WaitOverlayStateAsync(() => OverlayOpen && OverlayContent.Child is CharacterImageCropper);
-            if (accept) ((CharacterImageCropper)OverlayContent.Child).ConfirmButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            var cropper = (CharacterImageCropper)OverlayContent.Child;
+            if (cropper.Surface.Circular != forAvatar) throw new InvalidOperationException("Character cropper showed the wrong selection shape");
+            if (forAvatar)
+            {
+                cropper.Surface.Select(new Rect(55, 38, 100, 100));
+                if (cropper.Surface.InsideSelection(new Point(55, 38)) || !cropper.Surface.InsideSelection(new Point(105, 88)))
+                    throw new InvalidOperationException("Circular avatar selection used a rectangular hit region");
+                UpdateLayout(); App.Capture(this, Path.Combine(output, "character-avatar-crop.png"));
+            }
+            if (accept) cropper.ConfirmButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             else CompleteOverlay(false);
             return await pending;
         }
@@ -55,6 +64,14 @@ public partial class MainWindow
         if (!await CropAsync(fileDrop) || CharacterEditor.DraftImage is null)
             throw new InvalidOperationException("Inline avatar drop failed");
         var previousImage = CharacterEditor.DraftImage;
+        if (!await CropAsync(bitmapDrop, forAvatar: true) || CharacterEditor.DraftAvatar is not { Crop: not null } avatar
+            || ReferenceEquals(avatar, previousImage) || !ReferenceEquals(CharacterEditor.DraftImage, previousImage))
+            throw new InvalidOperationException("Avatar crop replaced the cover or lost its crop");
+        var avatarBitmap = await VM.Images.DisplayAsync(avatar, 128, false, default);
+        if (!avatar.SquareCrop || avatarBitmap.PixelWidth != avatarBitmap.PixelHeight)
+            throw new InvalidOperationException("Circle avatar crop was stretched into a portrait");
+        if (await CropAsync(bitmapDrop, accept: false, forAvatar: true) || !ReferenceEquals(CharacterEditor.DraftAvatar, avatar))
+            throw new InvalidOperationException("Cancel replaced the existing avatar draft");
         var badPath = Path.Combine(output, "invalid-image.png"); await File.WriteAllTextAsync(badPath, "invalid image");
         if (await CharacterEditor.ReceiveImageDropAsync(new DataObject(DataFormats.FileDrop, new[] { badPath })) || CharacterEditor.DraftImage != previousImage)
             throw new InvalidOperationException("Invalid image replaced the avatar draft");
@@ -65,10 +82,23 @@ public partial class MainWindow
             throw new InvalidOperationException("Inline character creation failed");
         var created = VM.DetailCard!;
         var saved = (await VM.Store.LoadCharactersAsync()).FirstOrDefault(x => x.Id == created.Id);
-        if (saved?.Image is null || saved.Setting != "测试设定" || saved.Greeting != "测试开场白" || saved.SystemPrompt != "测试系统提示词")
+        if (saved?.Image is null || saved.Avatar is not { OriginalAssetId: not null, Store: not null }
+            || saved.Setting != "测试设定" || saved.Greeting != "测试开场白" || saved.SystemPrompt != "测试系统提示词")
             throw new InvalidOperationException("Inline character fields or image were not persisted");
         if (VM.Current.CharacterSnapshot != snapshot || VM.Current.CharacterId != characterId)
             throw new InvalidOperationException("Library save changed the current chat character");
+        await VM.NewChatAsync(saved); ShowPage("chat", animate: false); UpdateLayout();
+        var roleAvatar = Descendants<ContentControl>(MessagesList).Single(control => control.Name == "RoleAvatar" && control.IsVisible);
+        var roleName = Descendants<TextBlock>(MessagesList).Single(control => control.Name == "RoleMessageName" && control.IsVisible);
+        if (roleAvatar.Content is not Reflection.Core.ChatImage roleImage || roleImage.AssetId != saved.Avatar.AssetId || roleName.Text != saved.Name)
+            throw new InvalidOperationException("Role message did not show the conversation's avatar and name");
+        await Task.Delay(180); App.Capture(this, Path.Combine(output, "character-avatar-chat.png"));
+        var roleChat = VM.Current.Id;
+        NewChatButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        await WaitOverlayStateAsync(() => VM.Current.Id != roleChat && currentPage == "chat");
+        if (VM.Current.CharacterId is not null || VM.HasChatCharacter || VM.Current.Messages.Count != 0)
+            throw new InvalidOperationException("New chat inherited a previous character");
+        ShowPage("detail", animate: false);
         EditDetail_Click(this, new RoutedEventArgs());
         CharacterEditor.NameField.Text = "should be discarded";
         await CropAsync(bitmapDrop);

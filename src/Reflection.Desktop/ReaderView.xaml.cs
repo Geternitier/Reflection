@@ -343,23 +343,41 @@ public partial class ReaderView : UserControl, INotifyPropertyChanged
     private void Copy_Click(object sender, RoutedEventArgs e) { if (document is null) return; try { Clipboard.SetText(document.Text); Status = "已复制全文。"; } catch (System.Runtime.InteropServices.ExternalException) { Status = "剪贴板暂不可用，请重试。"; } }
     private async void Link_Requested(object sender, RoutedEventArgs e)
     {
-        if (e.OriginalSource is not ReadingText { RequestedLink: { } link } || document is null) return;
+        if (e.OriginalSource is not ReadingText text || document is null) return;
+        if (text.RequestedFootnoteOffset is { } offset)
+        {
+            e.Handled = true;
+            await RestorePositionAsync(new(offset, 0));
+            return;
+        }
+        if (text.RequestedLink is not { } link) return;
         try
         {
             if (link.StartsWith('#'))
             {
-                var heading = document.Outline.FirstOrDefault(h => h.Anchor == Uri.UnescapeDataString(link[1..]));
-                if (heading is not null) { OutlineList.SelectedItem = heading; }
+                await JumpToHeadingAsync(link[1..]);
                 return;
             }
             if (Uri.TryCreate(link, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https" or "mailto")
             { Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true }); return; }
             if (Uri.TryCreate(link, UriKind.Absolute, out uri) && !uri.IsFile) { Status = "此链接类型不受支持。"; return; }
             var path = uri?.IsFile == true ? uri.LocalPath : Path.GetFullPath(Path.Combine(Path.GetDirectoryName(document.Path)!, Uri.UnescapeDataString(link.Split('#')[0])));
-            if (ReaderDocuments.Supported(path)) await OpenDocumentAsync(path); else Status = "仅打开 Markdown 和 TXT 文档链接。";
+            if (!ReaderDocuments.Supported(path)) { Status = "仅打开 Markdown 和 TXT 文档链接。"; return; }
+            var fragment = link.IndexOf('#');
+            await OpenDocumentAsync(path);
+            if (fragment >= 0 && string.Equals(document?.Path, path, StringComparison.OrdinalIgnoreCase))
+                await JumpToHeadingAsync(link[(fragment + 1)..]);
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or System.ComponentModel.Win32Exception or UriFormatException) { Status = ex.Message; }
     }
+    private async Task JumpToHeadingAsync(string fragment)
+    {
+        if (document is not { } current) return;
+        var anchor = ReaderDocuments.HeadingAnchor(Uri.UnescapeDataString(fragment));
+        var heading = current.Outline.FirstOrDefault(h => h.Anchor.Equals(anchor, StringComparison.OrdinalIgnoreCase));
+        if (heading is not null) await RestorePositionAsync(new(current.Pieces[heading.Piece].Offset, 0));
+    }
+
     private void KeyPressed(object sender, KeyEventArgs e)
     {
         if (e.Handled) return;

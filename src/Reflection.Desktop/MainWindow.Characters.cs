@@ -45,7 +45,7 @@ public partial class MainWindow
             var snapshot = VM.Current.CharacterSnapshot;
             var characterId = VM.Current.CharacterId;
             VM.Characters.RemoveAt(index);
-            if (VM.SelectedCharacter == original) VM.SelectedCharacter = VM.Characters.FirstOrDefault();
+            if (VM.SelectedCharacter == original) VM.SelectedCharacter = null;
             VM.DetailCard = VM.Characters.FirstOrDefault();
             VM.RestoreCharacter(snapshot, characterId);
         }
