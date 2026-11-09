@@ -3,6 +3,7 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -44,6 +45,23 @@ public partial class MainWindow : Window
     }
     internal async Task VerifyChromeAsync(string output)
     {
+        void VerifyCaption(string label, string icon)
+        {
+            UpdateLayout();
+            if (!ReferenceEquals(FindChild<Glyph>(MaximizeWindowButton)?.Data, FindResource(icon))
+                || !Equals(MaximizeWindowButton.ToolTip, label) || AutomationProperties.GetName(MaximizeWindowButton) != label
+                || !MaximizeWindowButton.Focusable || MaximizeWindowButton.InputHitTest(new Point(22, 16)) is null)
+                throw new InvalidOperationException("Window caption did not expose the correct action: " + label);
+        }
+
+        VerifyCaption("最大化", "IconMaximize");
+        MaximizeWindowButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        await WaitOverlayStateAsync(() => WindowState == WindowState.Maximized);
+        VerifyCaption("还原", "IconRestore");
+        MaximizeWindowButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        await WaitOverlayStateAsync(() => WindowState == WindowState.Normal);
+        VerifyCaption("最大化", "IconMaximize");
+
         ShowPage("chat"); UpdateLayout();
         var height = TopBar.ActualHeight;
         var width = TopBar.ActualWidth;
@@ -105,7 +123,7 @@ public partial class MainWindow : Window
     internal async Task VerifyComponentsAsync(string output)
     {
         ShowPage("chat"); await Task.Delay(260); UpdateLayout();
-        var keys = new[] { "Edit", "Copy", "Delete", "Export", "Import", "Continue", "Refresh", "Image", "Attach", "Close", "Menu", "Role", "Settings", "Send", "Stop", "Help", "Plus", "Minimize", "Maximize", "Chevron", "Reason" };
+        var keys = new[] { "Edit", "Copy", "Delete", "Export", "Import", "Continue", "Refresh", "Image", "Attach", "Close", "Menu", "Role", "Settings", "Send", "Stop", "Help", "Plus", "Minimize", "Maximize", "Restore", "Chevron", "Reason" };
         var atlas = new System.Windows.Controls.Primitives.UniformGrid { Columns = 7, Width = 560, Background = Brushes.White };
         foreach (var key in keys)
         {

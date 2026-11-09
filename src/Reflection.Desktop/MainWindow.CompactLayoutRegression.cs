@@ -71,6 +71,10 @@ public partial class MainWindow
         ShowPage("reader"); await ReaderPage.InitializeAsync(); await Task.Delay(220); UpdateLayout();
         if (!ReaderHeaderHost.IsVisible || ReaderHeaderHost.ActualHeight > 34.5 || !ReferenceEquals(ReaderHeaderHost.Content, ReaderPage.HeaderToolbar))
             throw new InvalidOperationException("Reader tools did not share the compact page header");
+        var readerActions = ((DockPanel)ReaderPage.HeaderToolbar).Children.OfType<StackPanel>().Single().Children
+            .OfType<Button>().Select(AutomationProperties.GetName);
+        if (!readerActions.SequenceEqual(["字号与排版", "目录"]))
+            throw new InvalidOperationException("Reader header did not reduce its right side to typography and outline");
         var pageTop = ReaderPage.TranslatePoint(new Point(), WorkspaceRoot).Y;
         if (pageTop > 77) throw new InvalidOperationException("Reader retained the extra toolbar row");
         App.Capture(this, Path.Combine(output, "compact-reader-header.png"));

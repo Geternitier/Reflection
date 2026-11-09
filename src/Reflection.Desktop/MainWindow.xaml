@@ -45,7 +45,22 @@
   <Grid Grid.Column="2" Background="{DynamicResource Surface}">
    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" shell:WindowChrome.IsHitTestVisibleInChrome="True">
     <TextBlock x:Name="PrivateModeIndicator" Text="隐私模式" Visibility="Collapsed" FontSize="11" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" Margin="0,0,12,0"/><Button Style="{StaticResource CaptionButton}" ToolTip="最小化" AutomationProperties.Name="最小化" Content="{StaticResource IconMinimize}" Click="Minimize_Click"/>
-    <Button Style="{StaticResource CaptionButton}" ToolTip="最大化或还原" AutomationProperties.Name="最大化或还原" Content="{StaticResource IconMaximize}" Click="Maximize_Click"/>
+    <Button x:Name="MaximizeWindowButton" Click="Maximize_Click">
+     <Button.Style>
+      <Style TargetType="Button" BasedOn="{StaticResource CaptionButton}">
+       <Setter Property="Content" Value="{StaticResource IconMaximize}"/>
+       <Setter Property="ToolTip" Value="最大化"/>
+       <Setter Property="AutomationProperties.Name" Value="最大化"/>
+       <Style.Triggers>
+        <DataTrigger Binding="{Binding WindowState, RelativeSource={RelativeSource AncestorType={x:Type Window}}}" Value="Maximized">
+         <Setter Property="Content" Value="{StaticResource IconRestore}"/>
+         <Setter Property="ToolTip" Value="还原"/>
+         <Setter Property="AutomationProperties.Name" Value="还原"/>
+        </DataTrigger>
+       </Style.Triggers>
+      </Style>
+     </Button.Style>
+    </Button>
     <Button x:Name="CloseWindowButton" Style="{StaticResource CaptionButton}" ToolTip="关闭" AutomationProperties.Name="关闭" Content="{StaticResource IconClose}" Click="Close_Click"/>
    </StackPanel>
   </Grid>

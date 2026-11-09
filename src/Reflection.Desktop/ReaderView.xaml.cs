@@ -301,7 +301,7 @@ public partial class ReaderView : UserControl, INotifyPropertyChanged
         var close = toggle && InspectorPanel.IsVisible && typographyOpen == typography;
         typographyOpen = typography; outlineOverride = !close; focus = false; UpdatePanels();
     }
-    private void Focus_Click(object sender, RoutedEventArgs e) { focus = !focus; state.FocusMode = focus; UpdatePanels(); _ = SaveQuietlyAsync(); }
+    private void ToggleFocusMode() { focus = !focus; state.FocusMode = focus; UpdatePanels(); _ = SaveQuietlyAsync(); }
     private void UpdatePanels()
     {
         var showLibrary = libraryOpen && !focus;
@@ -313,8 +313,6 @@ public partial class ReaderView : UserControl, INotifyPropertyChanged
         InspectorPanel.Visibility = showOutline ? Visibility.Visible : Visibility.Collapsed;
         OutlinePanel.Visibility = showOutline && !typographyOpen ? Visibility.Visible : Visibility.Collapsed;
         SettingsPanel.Visibility = showOutline && typographyOpen ? Visibility.Visible : Visibility.Collapsed;
-        FocusButton.ToolTip = focus ? "退出专注 · F11" : "专注阅读 · F11";
-        FocusButton.SetResourceReference(BackgroundProperty, focus ? "AccentSoft" : "Surface");
     }
     private void Typography_Changed(object sender, RoutedPropertyChangedEventArgs<double> e) { if (settingsReady) { typographyTimer.Stop(); typographyTimer.Start(); } }
     private void Typography_Click(object sender, RoutedEventArgs e) { if (settingsReady) { typographyTimer.Stop(); typographyTimer.Start(); } }
@@ -384,9 +382,9 @@ public partial class ReaderView : UserControl, INotifyPropertyChanged
         if (e.Key == Key.O && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
         { if (Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)) Folder_Click(this, new()); else Open_Click(this, new()); e.Handled = true; }
         else if (e.Key == Key.K && Keyboard.Modifiers == ModifierKeys.Control) { libraryOpen = true; focus = false; outlineOverride = false; UpdatePanels(); NameFilter.Focus(); NameFilter.SelectAll(); e.Handled = true; }
-        else if (e.Key == Key.F11) { Focus_Click(this, new()); e.Handled = true; }
+        else if (e.Key == Key.F11) { ToggleFocusMode(); e.Handled = true; }
         else if (e.Key == Key.Escape && InspectorPanel.IsVisible) { InspectorClose_Click(this, new()); e.Handled = true; }
-        else if (e.Key == Key.Escape && focus) { Focus_Click(this, new()); e.Handled = true; }
+        else if (e.Key == Key.Escape && focus) { ToggleFocusMode(); e.Handled = true; }
         else if (Keyboard.FocusedElement is not System.Windows.Controls.Primitives.TextBoxBase || Keyboard.FocusedElement is ReadingText)
         {
             if (Keyboard.Modifiers is not (ModifierKeys.None or ModifierKeys.Control)) return;

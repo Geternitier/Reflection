@@ -35,7 +35,7 @@
 <div class="workspace"><div class="caption">—　□　×</div><div class="pagehead"><svg class="ico"><use href="#menu"/></svg><b>阅读</b><span>函数极限.md</span><span class="spacer"></span><span>字号　目录</span></div><div class="read-layout"><div class="library"><b>书库</b><div class="tree">⌄　笔记</div><div class="tree indent selected">函数极限.md</div><div class="tree indent">连续函数.md</div></div><article class="reading"><h3>函数极限的性质</h3><p>标题与正文共用行距设置，长文按视口分块排版。阅读位置通过源码锚点恢复。</p><div class="math">lim [ f(x) + g(x) ] = A + B</div><p>留出稳定行宽，让正文、列表与公式保持清晰的层次。</p></article><div class="inspector"><b>目录　 /　排版</b><p class="selected">极限的性质</p><p>运算法则</p><p>连续性</p></div></div></div></div><div class="caption-note">结构示意。应用中目录与排版在同一右侧面板切换；顶部操作使用图标，图中以文字标注位置。</div></div>
 <div class="measure"><div><strong>254 DIP</strong>常驻侧栏宽度</div><div><strong>32 + 44 DIP</strong>标题栏与统一页头</div><div><strong>720 × 620</strong>最小窗口尺寸</div><div><strong>1100 DIP</strong>以下采用侧栏遮罩抽屉</div></div>
 <p class="note">窗口关闭默认收起到托盘，标题栏关闭按钮的工具提示和可访问名称为「关闭到托盘」。左键单击图标恢复原窗口，右键可打开或退出 Reflection。图标提示仅显示应用名。关闭「设置 → 窗口行为」中的托盘偏好后，关闭窗口会退出应用。</p>
-<div class="grid" style="margin-top:22px"><div class="card"><h3>共用页头</h3><p>菜单、页面名称和操作保持同排。角色页右侧提供导入与创建，阅读工具交给主窗口页头宿主，不另加第二行工具栏。角色与阅读隐藏无关连接徽标。</p></div><div class="card"><h3>侧栏工具</h3><p><svg class="ico" aria-hidden="true"><use href="#shield"/></svg> 日常　<svg class="ico" aria-hidden="true"><use href="#private"/></svg> 隐私。模式、主题、设置只显示图标并保持同排，以不同图形、背景、工具提示和无障碍名称说明状态；隐私模式另有标题栏标记。</p></div></div>
+<div class="grid" style="margin-top:22px"><div class="card"><h3>共用页头</h3><p>菜单、页面名称和操作保持同排。角色页右侧提供导入与创建，阅读工具交给主窗口页头宿主，右侧仅放排版和目录入口。角色与阅读隐藏无关连接徽标。</p></div><div class="card"><h3>侧栏工具</h3><p><svg class="ico" aria-hidden="true"><use href="#shield"/></svg> 日常　<svg class="ico" aria-hidden="true"><use href="#private"/></svg> 隐私。模式、主题、设置只显示图标并保持同排，以不同图形、背景、工具提示和无障碍名称说明状态；隐私模式另有标题栏标记。</p></div></div>
 </section>
 <section id="palette"><div class="section-title"><span class="index">02</span><h2>语义配色与度量</h2></div>
 <p class="note">与 ThemeManager 语义资源对应，色值依次为浅色 / 深色。不要在控件中遗留系统白底、黑字或单独硬编码深浅主题。</p>
@@ -57,7 +57,7 @@
 <tr><td>正文选区与列表</td><td>浅色暖灰、深色暖炭，复用输入框选区色</td><td>无序列表前三级使用实心方块、圆点、小圆点，标记逐级缩小。更深层沿用小圆点，列表正文沿用阅读字号。有序列表保留起始编号，序号留白随字号和位数调整。</td></tr>
 <tr><td>右侧阅读面板</td><td>280 DIP</td><td>目录与排版共用；窄屏按操作临时收起书库，专注模式隐藏两侧。</td></tr>
 <tr><td>历史与滚动条</td><td>历史正文行至少 30 DIP；滑块视觉宽 3 DIP，最长 96 DIP</td><td>标题单行省略，命中区保留；滚动范围与拖动语义保持完整。</td></tr>
-<tr><td>窗口</td><td>8 DIP 微圆角，最大化恢复直角</td><td>WindowChrome；Windows 11 请求系统小圆角。原应用 PNG / ICO 保留。</td></tr>
+<tr><td>窗口</td><td>8 DIP 微圆角，最大化恢复直角</td><td>最大化用单方框，还原用叠放的双方框，工具提示和无障碍名称随窗口状态切换。Windows 11 请求系统小圆角。</td></tr>
 </tbody></table></div>
 </section>
 <section id="interaction"><div class="section-title"><span class="index">03</span><h2>页面与交互状态</h2></div>

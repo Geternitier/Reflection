@@ -111,6 +111,15 @@ public partial class ReaderView
         var text = MainWindow.Descendants<ReadingText>(Pages).ToArray();
         if (text.Sum(t => t.RenderedFormulaCount) < 3) throw new InvalidOperationException("Markdown file math did not render");
         if (text.Length == 0 || text[0].TextSize != 18 || !text.Any(t => new TextRange(t.Document.ContentStart, t.Document.ContentEnd).Text.Contains("阅读示例"))) throw new InvalidOperationException("Reader data/typography bindings failed");
+        var initialFocus = focus;
+        foreach (var expected in new[] { !initialFocus, initialFocus })
+        {
+            var shortcut = new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(Pages)!, 0, Key.F11)
+                { RoutedEvent = Keyboard.PreviewKeyDownEvent };
+            Pages.RaiseEvent(shortcut);
+            if (!shortcut.Handled || focus != expected || expected && (LibraryPanel.IsVisible || InspectorPanel.IsVisible))
+                throw new InvalidOperationException("F11 did not toggle focus mode from the reader");
+        }
         App.Capture(Owner, Path.Combine(output, "reader-markdown.png"));
         const string limits = "# 函数极限的性质\n\n1. 唯一性：$f$在点$p$的极限存在，则该极限的值唯一。\n2. 局部有界性：对任意小的正数$\\varepsilon$，总有点$p$的一个邻域使函数值在$\\mathring N_\\varepsilon(q)$中。\n   - 对应实函数的局部有界性和局部保号性。\n\n## 一元实函数极限的性质\n\n1. 运算法则：$f,g:X\\to\\mathbb{R}$，设$\\lim f(x)=A,\\lim g(x)=B$，有\n   1. $\\lim[kf(x)+lg(x)]=kA+lB$，其中$k,l$为常数。\n   2. $\\lim[f(x)g(x)]=AB$。\n   3. $\\lim\\frac{f(x)}{g(x)}=\\frac{A}{B},B\\ne0$。\n";
         var limitsPath = Path.Combine(fixture, "极限.md"); await File.WriteAllTextAsync(limitsPath, limits);
