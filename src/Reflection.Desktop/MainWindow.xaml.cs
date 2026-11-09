@@ -3,6 +3,7 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -44,6 +45,23 @@ public partial class MainWindow : Window
     }
     internal async Task VerifyChromeAsync(string output)
     {
+        void VerifyCaption(string label, string icon)
+        {
+            UpdateLayout();
+            if (!ReferenceEquals(FindChild<Glyph>(MaximizeWindowButton)?.Data, FindResource(icon))
+                || !Equals(MaximizeWindowButton.ToolTip, label) || AutomationProperties.GetName(MaximizeWindowButton) != label
+                || !MaximizeWindowButton.Focusable || MaximizeWindowButton.InputHitTest(new Point(22, 16)) is null)
+                throw new InvalidOperationException("Window caption did not expose the correct action: " + label);
+        }
+
+        VerifyCaption("最大化", "IconMaximize");
+        MaximizeWindowButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        await WaitOverlayStateAsync(() => WindowState == WindowState.Maximized);
+        VerifyCaption("还原", "IconRestore");
+        MaximizeWindowButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        await WaitOverlayStateAsync(() => WindowState == WindowState.Normal);
+        VerifyCaption("最大化", "IconMaximize");
+
         ShowPage("chat"); UpdateLayout();
         var height = TopBar.ActualHeight;
         var width = TopBar.ActualWidth;
@@ -105,7 +123,7 @@ public partial class MainWindow : Window
     internal async Task VerifyComponentsAsync(string output)
     {
         ShowPage("chat"); await Task.Delay(260); UpdateLayout();
-        var keys = new[] { "Edit", "Copy", "Delete", "Export", "Import", "Continue", "Refresh", "Image", "Attach", "Close", "Menu", "Role", "Settings", "Send", "Stop", "Help", "Plus", "Minimize", "Maximize", "Chevron", "Reason" };
+        var keys = new[] { "Edit", "Copy", "Delete", "Export", "Import", "Continue", "Refresh", "Image", "Attach", "Close", "Menu", "Role", "Settings", "Send", "Stop", "Help", "Plus", "Minimize", "Maximize", "Restore", "Chevron", "Reason" };
         var atlas = new System.Windows.Controls.Primitives.UniformGrid { Columns = 7, Width = 560, Background = Brushes.White };
         foreach (var key in keys)
         {
@@ -546,6 +564,7 @@ public partial class MainWindow : Window
                     if (cropped is null) return;
                     card.Image = cropped;
                 }
+                if (card.Avatar is not null) card.Avatar = await VM.Images.NormalizeAsync(card.Avatar, ct);
                 ct.ThrowIfCancellationRequested();
                 await CommitCharacterLibraryAsync(null, card);
                 VM.DetailCard = card; VM.Status = "角色卡已导入"; ShowPage("detail");
@@ -571,7 +590,7 @@ public partial class MainWindow : Window
         ParamHost.Children.Clear(); paramBoxes.Clear();
         var info = VM.SelectedModel?.Info;
         refreshingSettings = true;
-        foreach (var field in Prompting.Fields)
+        foreach (var field in Prompting.Fields.Where(field => field.Key != "num_ctx"))
         {
             var shown = Prompting.ShownDefault(field, info);
             var stored = VM.Settings.ParamDefaults.TryGetValue(field.Key, out var value) ? value : "";
@@ -628,7 +647,8 @@ public partial class MainWindow : Window
         var defaults = new Dictionary<string, string>();
         foreach (var field in Prompting.Fields)
         {
-            var text = paramBoxes[field.Key].Text.Trim();
+            if (!paramBoxes.TryGetValue(field.Key, out var box)) continue;
+            var text = box.Text.Trim();
             var shown = Prompting.ShownDefault(field, info);
             if (text.Length == 0 || (shown.Length > 0 && Prompting.Same(field, text, shown))) continue;
             if (field.Lines)

@@ -94,8 +94,18 @@
   <Geometry x:Key="IconPlus">M 12,5 L 12,19 M 5,12 L 19,12</Geometry>
   <Geometry x:Key="IconMinimize">M 6,12 L 18,12</Geometry>
   <Geometry x:Key="IconMaximize">M 7,6 L 17,6 Q 18,6 18,7 L 18,17 Q 18,18 17,18 L 7,18 Q 6,18 6,17 L 6,7 Q 6,6 7,6</Geometry>
+  <Geometry x:Key="IconRestore">M 9,9 L 9,7 Q 9,6 10,6 L 17,6 Q 18,6 18,7 L 18,14 Q 18,15 17,15 L 15,15 M 7,9 L 14,9 Q 15,9 15,10 L 15,17 Q 15,18 14,18 L 7,18 Q 6,18 6,17 L 6,10 Q 6,9 7,9</Geometry>
   <Geometry x:Key="IconChevron">M 8,10 L 12,14 L 16,10</Geometry>
   <Geometry x:Key="IconReason">M 9,5 C 5,3 3,8 5,10 C 2,13 4,18 8,18 C 8,22 12,21 12,18 L 12,6 C 12,3 9,3 9,5 M 15,5 C 19,3 21,8 19,10 C 22,13 20,18 16,18 C 16,22 12,21 12,18 M 7,9 C 10,9 10,11 10,12 M 17,9 C 14,9 14,11 14,12</Geometry>
+  <ControlTemplate x:Key="RoundCharacterAvatar" TargetType="ContentControl">
+   <Viewbox Stretch="Uniform">
+    <Grid Width="36" Height="36" Background="{DynamicResource AccentSoft}">
+     <Grid.Clip><EllipseGeometry Center="18,18" RadiusX="18" RadiusY="18"/></Grid.Clip>
+     <local:Glyph Data="{StaticResource IconRole}" Width="18" Height="18" Foreground="{DynamicResource Muted}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+     <local:AssetImage Picture="{Binding Content, RelativeSource={RelativeSource TemplatedParent}}" DecodeSize="128" Stretch="UniformToFill"/>
+    </Grid>
+   </Viewbox>
+  </ControlTemplate>
   <Style x:Key="IconButton" TargetType="Button" BasedOn="{StaticResource Quiet}">
    <Setter Property="Width" Value="34"/><Setter Property="Height" Value="34"/><Setter Property="Padding" Value="0"/><Setter Property="VerticalAlignment" Value="Center"/>
    <Setter Property="ContentTemplate"><Setter.Value><DataTemplate><local:Glyph Data="{Binding}" Width="20" Height="20" Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/></DataTemplate></Setter.Value></Setter>

@@ -13,8 +13,8 @@ using System.Windows.Threading;
 
 namespace Reflection.Desktop;
 
-// No HTML, external navigation or executable TeX. Streaming repaints are throttled.
-public class MarkdownText : RichTextBox
+// Markdown uses native document elements. Streaming repaints are throttled.
+public partial class MarkdownText : RichTextBox
 {
     static MarkdownText()
     {
@@ -24,10 +24,13 @@ public class MarkdownText : RichTextBox
     public static readonly DependencyProperty SourceProperty = DependencyProperty.Register(nameof(Source), typeof(string), typeof(MarkdownText), new PropertyMetadata("", Changed));
     public string Source { get => (string)GetValue(SourceProperty); set => SetValue(SourceProperty, value); }
     public static readonly DependencyProperty IsStreamingProperty = DependencyProperty.Register(nameof(IsStreaming), typeof(bool), typeof(MarkdownText), new PropertyMetadata(false, StreamingChanged));
+    public static readonly DependencyProperty FitShortLineProperty = DependencyProperty.Register(nameof(FitShortLine), typeof(bool), typeof(MarkdownText),
+        new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.AffectsMeasure));
     public bool IsStreaming { get => (bool)GetValue(IsStreamingProperty); set => SetValue(IsStreamingProperty, value); }
+    public bool FitShortLine { get => (bool)GetValue(FitShortLineProperty); set => SetValue(FitShortLineProperty, value); }
     private readonly DispatcherTimer repaint = new() { Interval = TimeSpan.FromMilliseconds(120) };
-    internal int FormulaCount { get; private set; }
-    internal int FormulaFallbackCount { get; private set; }
+    internal int FormulaCount { get; private protected set; }
+    internal int FormulaFallbackCount { get; private protected set; }
     internal string FormulaError { get; private set; } = "";
     private long formulaPixels;
     private string? rendered;
@@ -38,6 +41,7 @@ public class MarkdownText : RichTextBox
         repaint.Tick += (_, _) => { repaint.Stop(); if (IsVisible) Render(); };
         IsReadOnly = true; IsDocumentEnabled = true; BorderThickness = new Thickness(0); Background = Brushes.Transparent;
         ContextMenu = null; Padding = new Thickness(0);
+        SetResourceReference(SelectionBrushProperty, "ToneE2DCCE");
         VerticalScrollBarVisibility = ScrollBarVisibility.Disabled; HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
         Loaded += (_, _) => { ThemeManager.Changed += OnThemeChanged; Render(); };
         Unloaded += (_, _) => { ThemeManager.Changed -= OnThemeChanged; repaint.Stop(); };
@@ -55,111 +59,52 @@ public class MarkdownText : RichTextBox
         var view = (MarkdownText)obj;
         if (!(bool)e.NewValue) { view.repaint.Stop(); if (view.IsVisible) view.Render(); }
     }
+    protected override Size MeasureOverride(Size constraint)
+    {
+        if (FitShortLine && Source is { Length: > 0 and <= 128 } text && text.AsSpan().IndexOfAny('\r', '\n') < 0
+            && Document.Blocks.Count == 1 && Document.Blocks.FirstBlock is Paragraph paragraph
+            && MeasureInlineWidth(paragraph.Inlines, VisualTreeHelper.GetDpi(this).PixelsPerDip) is { } width)
+        {
+            static double Horizontal(Thickness inset) =>
+                (double.IsFinite(inset.Left) ? inset.Left : 0) + (double.IsFinite(inset.Right) ? inset.Right : 0);
+            // Allow a small rounding reserve so a glyph at the right edge does not wrap.
+            var desired = Math.Ceiling(width + Horizontal(paragraph.Margin) + Horizontal(paragraph.Padding) + Horizontal(paragraph.BorderThickness)) + 2;
+            constraint.Width = Math.Min(constraint.Width, desired);
+        }
+        return base.MeasureOverride(constraint);
+    }
+
+    private static double? MeasureInlineWidth(InlineCollection inlines, double pixelsPerDip)
+    {
+        var width = 0d;
+        foreach (var inline in inlines)
+        {
+            if (inline is Span span && MeasureInlineWidth(span.Inlines, pixelsPerDip) is { } spanWidth)
+                width += spanWidth;
+            else if (inline is Run run)
+            {
+                if (run.Text.Length == 0) continue;
+                var typeface = new Typeface(run.FontFamily, run.FontStyle, run.FontWeight, run.FontStretch);
+                width += new FormattedText(run.Text, CultureInfo.CurrentUICulture, run.FlowDirection,
+                    typeface, run.FontSize, run.Foreground, pixelsPerDip).WidthIncludingTrailingWhitespace;
+            }
+            else return null;
+        }
+        return width;
+    }
+
     internal virtual void Render()
     {
         if (rendered == Source && renderedTheme == ThemeManager.Revision) return;
-        var document = new FlowDocument { PagePadding = new Thickness(0), FontSize = 14, FontFamily = FontFamily, Foreground = (Brush)Application.Current.FindResource("Ink") };
-        TableCount = 0; FormulaCount = 0; FormulaFallbackCount = 0; FormulaError = ""; formulaPixels = 0;
-        Paragraph? current = null;
-        Paragraph Paragraph() { if (current is null) { current = new Paragraph { Margin = new Thickness(0, 0, 0, 10), LineStackingStrategy = LineStackingStrategy.MaxHeight }; document.Blocks.Add(current); } return current; }
-        void Text(string text)
-        {
-            var lines = text.ReplaceLineEndings("\n").Split('\n');
-            for (var i = 0; i < lines.Length; i++)
-            {
-                if (i > 0) current = null;
-                if (lines[i].Length == 0) continue;
-                var content = lines[i]; var newLine = current is null; var paragraph = Paragraph();
-                var heading = newLine ? Regex.Match(content, @"^(#{1,4})\s+(.+)$") : Match.Empty;
-                if (heading.Success) { content = heading.Groups[2].Value; paragraph.FontSize = 23 - heading.Groups[1].Length * 2; paragraph.FontWeight = FontWeights.SemiBold; paragraph.Margin = new Thickness(0, 12, 0, 8); }
-                else if (newLine && (content.StartsWith("- ") || content.StartsWith("* "))) content = "•  " + content[2..];
-                else if (newLine && content.StartsWith("> ")) { content = content[2..]; paragraph.BorderThickness = new Thickness(3, 0, 0, 0); paragraph.BorderBrush = (Brush)Application.Current.FindResource("Accent"); paragraph.Padding = new Thickness(12, 0, 0, 0); }
-                var position = 0;
-                foreach (Match match in Regex.Matches(content, @"\*\*[^*]+\*\*|__[^_]+__|(?<!\*)\*(?![\s*])(?:[^*\n]*?[^\s*])\*(?!\*)|(?<!\w)_[^_\n]+_(?!\w)"))
-                {
-                    paragraph.Inlines.Add(new Run(content[position..match.Index]));
-                    paragraph.Inlines.Add(match.Value.StartsWith("**") || match.Value.StartsWith("__") ? (Inline)new Bold(new Run(match.Value[2..^2])) : new Italic(new Run(match.Value[1..^1]))); position = match.Index + match.Length;
-                }
-                paragraph.Inlines.Add(new Run(content[position..]));
-            }
-        }
-        foreach (var token in MessageMarkupTokenizer.Tokenize(Source))
-        {
-            if (token.Kind == MarkupKind.Table && MarkdownTableParser.TryRead(token.Raw, 0, out var table, out _) && table is not null)
-            { current = null; document.Blocks.Add(BuildTable(table)); TableCount++; continue; }
-            if (token.Kind == MarkupKind.Text) { Text(token.Text); continue; }
-            if (token.Kind == MarkupKind.CodeBlock)
-            {
-                current = null;
-                document.Blocks.Add(new Paragraph(new Run(token.Text.TrimEnd('\r', '\n'))) { FontFamily = new FontFamily("Cascadia Code, Consolas"), FontSize = 13, Background = (Brush)Application.Current.FindResource("Sidebar"), Padding = new Thickness(12), Margin = new Thickness(0, 8, 0, 14) }); continue;
-            }
-            if (token.Kind == MarkupKind.InlineCode)
-            { Paragraph().Inlines.Add(new Run(token.Text) { FontFamily = new FontFamily("Consolas"), Background = (Brush)Application.Current.FindResource("AccentSoft") }); continue; }
-            var block = token.Kind == MarkupKind.DisplayMath;
-            var formula = Formula(token.Text, block, ++FormulaCount <= 64);
-            if (formula is null) { FormulaFallbackCount++; Text(token.Raw); continue; }
-            if (block)
-            {
-                current = null;
-                var scroll = new ScrollViewer { Content = formula, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new Thickness(8, 10, 8, 14), MaxHeight = 600 };
-                scroll.SetBinding(MaxWidthProperty, new Binding(nameof(ActualWidth)) { Source = this, Converter = new FormulaWidthConverter() });
-                document.Blocks.Add(new BlockUIContainer(scroll) { Margin = new Thickness(0, 6, 0, 14) });
-            }
-            else
-            {
-                var inline = new ScrollViewer { Content = formula, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled };
-                inline.SetBinding(MaxWidthProperty, new Binding(nameof(ActualWidth)) { Source = this, Converter = new FormulaWidthConverter() });
-                Paragraph().Inlines.Add(new InlineUIContainer(inline) { BaselineAlignment = BaselineAlignment.Center });
-            }
-        }
+        var document = new FlowDocument { PagePadding = new Thickness(0), FontSize = LayoutFontSize,
+            FontFamily = BodyFont, Foreground = Brush("Ink"), LineStackingStrategy = LineStackingStrategy.MaxHeight };
+        ResetLayout(Source);
+        foreach (var block in Reflection.Core.ReaderDocuments.ParseMarkdown(Source)) AddBlock(document.Blocks, block, 0);
         Document = document; rendered = Source; renderedTheme = ThemeManager.Revision;
     }
+
     private static SKColor ToSkiaColor(Color color) => new(color.R, color.G, color.B, color.A);
-    private static Brush Brush(string key) => (Brush)Application.Current.FindResource(key);
-    private Table BuildTable(MarkdownTableData data)
-    {
-        var table = new Table { CellSpacing = 0, BorderBrush = Brush("Line"), BorderThickness = new Thickness(1), Margin = new Thickness(0, 8, 0, 16) };
-        for (var i = 0; i < data.Headers.Length; i++) table.Columns.Add(new TableColumn { Width = new GridLength(1, GridUnitType.Star) });
-        var group = new TableRowGroup(); table.RowGroups.Add(group);
-        void Row(string[] values, bool header)
-        {
-            var row = new TableRow(); group.Rows.Add(row);
-            if (header) { row.Background = Brush("TableHeader"); row.FontWeight = FontWeights.SemiBold; }
-            for (var column = 0; column < values.Length; column++)
-            {
-                var paragraph = new Paragraph { Margin = new Thickness(0), LineStackingStrategy = LineStackingStrategy.MaxHeight,
-                    TextAlignment = data.Alignments[column] switch { MarkdownColumnAlignment.Center => TextAlignment.Center, MarkdownColumnAlignment.Right => TextAlignment.Right, _ => TextAlignment.Left } };
-                AppendCell(paragraph, values[column], data.Headers.Length);
-                row.Cells.Add(new TableCell(paragraph) { Padding = new Thickness(10, 9, 10, 9), BorderBrush = Brush("Line"), BorderThickness = new Thickness(0, 0, column < values.Length - 1 ? 1 : 0, 1) });
-            }
-        }
-        Row(data.Headers, true); foreach (var row in data.Rows) Row(row, false);
-        foreach (var cell in group.Rows.Last().Cells) cell.BorderThickness = new Thickness(0, 0, cell.BorderThickness.Right, 0);
-        return table;
-    }
-    private void AppendCell(Paragraph paragraph, string text, int columns)
-    {
-        void Plain(string content)
-        {
-            var position = 0;
-            foreach (Match bold in Regex.Matches(content, @"\*\*[^*]+\*\*|__[^_]+__|(?<!\*)\*(?![\s*])(?:[^*\n]*?[^\s*])\*(?!\*)|(?<!\w)_[^_\n]+_(?!\w)"))
-            { paragraph.Inlines.Add(new Run(content[position..bold.Index])); paragraph.Inlines.Add(bold.Value.StartsWith("**") || bold.Value.StartsWith("__") ? (Inline)new Bold(new Run(bold.Value[2..^2])) : new Italic(new Run(bold.Value[1..^1]))); position = bold.Index + bold.Length; }
-            paragraph.Inlines.Add(new Run(content[position..]));
-        }
-        foreach (var token in MessageMarkupTokenizer.Tokenize(text, recognizeTables: false))
-        {
-            if (token.Kind == MarkupKind.InlineCode) { paragraph.Inlines.Add(new Run(token.Text) { FontFamily = new FontFamily("Consolas"), FontSize = 13, Background = Brush("AccentSoft") }); continue; }
-            if (token.Kind is MarkupKind.InlineMath or MarkupKind.DisplayMath)
-            {
-                var formula = Formula(token.Text, false, ++FormulaCount <= 64, displayStyle: true);
-                if (formula is null) { FormulaFallbackCount++; Plain(token.Raw); continue; }
-                var scroll = new ScrollViewer { Content = formula, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, VerticalScrollBarVisibility = ScrollBarVisibility.Disabled };
-                scroll.SetBinding(MaxWidthProperty, new Binding(nameof(ActualWidth)) { Source = this, Converter = new FormulaWidthConverter(), ConverterParameter = columns });
-                paragraph.Inlines.Add(new InlineUIContainer(scroll) { BaselineAlignment = BaselineAlignment.Center });
-            }
-            else Plain(token.Raw);
-        }
-    }
+    protected static Brush Brush(string key) => (Brush)Application.Current.FindResource(key);
     private static Image FormulaImage(BitmapSource image, double width, double height, string source)
     {
         var formula = new Image { Source = image, Width = width, Height = height, Stretch = Stretch.None, Focusable = false, IsHitTestVisible = false, HorizontalAlignment = HorizontalAlignment.Left };

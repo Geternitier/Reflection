@@ -7,7 +7,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try: super().handle()
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError): pass
     def do_GET(self):
-        payload = {"models": [{"name": "fixture-model"}]} if self.path == '/api/tags' else {"data": [{"id": "fixture-model"}]}
+        if self.path == '/api/tags': payload = {"models": [{"name": "fixture-model"}]}
+        elif self.path == '/api/ps': payload = {"models": [{"name": "fixture-model:latest", "context_length": 4096}]}
+        elif self.path == '/props': payload = {"default_generation_settings": {"n_ctx": 4096}}
+        else: payload = {"data": [{"id": "fixture-model"}]}
         body = json.dumps(payload).encode()
         self.send_response(200); self.send_header('Content-Type', 'application/json'); self.end_headers(); self.wfile.write(body)
     def do_POST(self):
@@ -36,6 +39,28 @@ class Handler(http.server.BaseHTTPRequestHandler):
             assert payload['messages'][1]['role'] == 'assistant' and payload['messages'][1]['content'] == 'original opening'
             assert not any(m['content'] == 'replacement opening' for m in payload['messages'])
         self.send_response(200); self.send_header('Content-Type', 'application/x-ndjson' if self.path == '/api/chat' else 'text/event-stream'); self.end_headers()
+        content = payload['messages'][-1]['content']
+        if isinstance(content, str) and content.startswith('token metrics fixture'):
+            expected = 8192 if content.endswith(' override') else None
+            requested = payload.get('options', {}).get('num_ctx') if self.path == '/api/chat' else payload.get('n_ctx')
+            assert requested == expected, f'Unexpected context override: {requested}'
+            time.sleep(.35)
+            if self.path == '/api/chat':
+                event = {'message': {'content': '统计验证'}, 'done': True, 'prompt_eval_count': 1000,
+                         'eval_count': 24, 'eval_duration': 1_000_000_000}
+                self.wfile.write((json.dumps(event) + '\n').encode())
+            else:
+                assert payload['stream_options']['include_usage']
+                events = [
+                    {'choices': [{'delta': {'content': '统计验证'}, 'finish_reason': 'stop'}],
+                     'timings': {'predicted_per_second': 24}},
+                    {'choices': [], 'usage': {'prompt_tokens': 1000, 'completion_tokens': 24, 'total_tokens': 1024}},
+                ]
+                for event in events:
+                    self.wfile.write(('data: ' + json.dumps(event) + '\n\n').encode())
+                self.wfile.write(b'data: [DONE]\n\n')
+            self.wfile.flush()
+            return
         if isinstance(payload['messages'][-1]['content'], str) and payload['messages'][-1]['content'].startswith('streaming lifecycle'):
             for thinking, content in [('正在分析问题。', ''), ('检查推导过程。', ''), ('', '# 实时标题\n\n'), ('', '这是 **即时粗体** 和*斜体*。\n\n'), ('', '- 列表项\n\n'), ('', '完成。')]:
                 if self.path == '/api/chat': line = json.dumps({'message': {'content': content, 'thinking': thinking}, 'done': False}, ensure_ascii=False) + '\n'

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO;
 using System.Windows;
 using System.Windows.Automation;
@@ -40,7 +41,7 @@ internal sealed class EditorDialog : UserControl
             if (textFields.FirstOrDefault() is { } first) { first.Focus(); Keyboard.Focus(first); first.SelectAll(); }
         });
     }
-    private void Hint(string text) => fields.Children.Add(new TextBlock { Text = text, Foreground = (Brush)FindResource("Muted"), FontSize = 13, LineHeight = 21, Margin = new Thickness(0,0,0,10) });
+    private void Hint(string text) => fields.Children.Add(new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap, Foreground = (Brush)FindResource("Muted"), FontSize = 13, LineHeight = 21, Margin = new Thickness(0,0,0,10) });
     private TextBox Field(string label, string value, int height = 44, string? id = null)
     {
         var box = new TextBox
@@ -93,6 +94,25 @@ internal sealed class EditorDialog : UserControl
         var text = d.Field("消息内容", message.Content, 220);
         return await d.ShowEditorAsync(() => { if (string.IsNullOrWhiteSpace(text.Text) && message.Images.Count == 0) d.Invalid(text, "消息不能为空。"); return true; }, resend ? "保存并重答" : "保存") ? text.Text.Trim() : null;
     }
+    internal static async Task<(bool Accepted, int? Value)> ContextWindowAsync(MainWindow owner, int? current, string usage)
+    {
+        var dialog = new EditorDialog(owner, "当前对话的上下文");
+        dialog.Hint(usage);
+        var input = dialog.Field("上下文长度（token）", current?.ToString(CultureInfo.InvariantCulture) ?? "", id: "ContextWindow");
+        input.Tag = "模型默认";
+        dialog.Hint("留空使用模型默认。填写后从下一次请求起应用，实际容量以服务为准。");
+        int? value = null;
+        var accepted = await dialog.ShowEditorAsync(() =>
+        {
+            if (string.IsNullOrWhiteSpace(input.Text)) return true;
+            if (!int.TryParse(input.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number) || number is < 1 or > Prompting.MaxContextWindow)
+                dialog.Invalid(input, $"请输入 1–{Prompting.MaxContextWindow:N0} 之间的整数，或留空使用模型默认。");
+            value = number;
+            return true;
+        });
+        return (accepted, value);
+    }
+
     internal static EditorDialog CreateService(MainWindow owner, ServiceConfig? original)
     {
         var d = new EditorDialog(owner, original is null ? "添加本地服务" : "编辑服务连接");

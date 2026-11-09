@@ -7,7 +7,6 @@
   <Geometry x:Key="ReaderLibrary">M 4,4 L 4,20 M 9,4 L 9,20 M 14,5 L 19,4 L 22,19 L 17,20 Z</Geometry>
   <Geometry x:Key="ReaderType">M 4,6 L 17,6 M 10.5,6 L 10.5,21 M 5,21 L 16,21 M 17,12 L 20,12 M 18.5,12 L 18.5,21</Geometry>
   <Geometry x:Key="ReaderOutline">M 4,5 L 6,5 M 10,5 L 20,5 M 4,12 L 6,12 M 10,12 L 18,12 M 4,19 L 6,19 M 10,19 L 20,19</Geometry>
-  <Geometry x:Key="ReaderFocus">M 9,4 L 4,4 L 4,9 M 15,4 L 20,4 L 20,9 M 4,15 L 4,20 L 9,20 M 15,20 L 20,20 L 20,15</Geometry>
   <local:ReaderIndentConverter x:Key="ReaderIndent"/>
   <Style x:Key="ReaderAction" TargetType="Button" BasedOn="{StaticResource IconButton}"><Setter Property="Margin" Value="2,0"/><Setter Property="Foreground" Value="{DynamicResource Ink}"/></Style>
   <Style x:Key="ReaderTreeItem" TargetType="TreeViewItem">
@@ -51,8 +50,6 @@
    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
     <Button Content="{StaticResource ReaderType}" Style="{StaticResource ReaderAction}" Click="Settings_Click" ToolTip="字号与排版" AutomationProperties.Name="字号与排版"/>
     <Button Content="{StaticResource ReaderOutline}" Style="{StaticResource ReaderAction}" Click="Outline_Click" ToolTip="目录" AutomationProperties.Name="目录"/>
-    <Button Content="{StaticResource ReaderFocus}" x:Name="FocusButton" Style="{StaticResource ReaderAction}" Click="Focus_Click" ToolTip="专注阅读 · F11" AutomationProperties.Name="专注阅读"/>
-    <Button Content="{StaticResource ReaderFile}" Style="{StaticResource ReaderAction}" Click="Open_Click" ToolTip="打开文件 · Ctrl+O" AutomationProperties.Name="打开文件"/>
    </StackPanel>
    <Button Content="{StaticResource ReaderLibrary}" Style="{StaticResource ReaderAction}" Click="Library_Click" ToolTip="书库" AutomationProperties.Name="书库" DockPanel.Dock="Left"/>
    <TextBlock Text="{Binding DocumentName}" FontSize="14" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="10,0"/>
@@ -81,7 +78,7 @@
     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
     <Border x:Name="SnapshotBanner" Background="{DynamicResource AccentSoft}" Padding="14,9" Visibility="Collapsed"><DockPanel><Button Content="{StaticResource IconRefresh}" DockPanel.Dock="Right" Click="Reload_Click" Style="{StaticResource MiniIconButton}" ToolTip="重新读取" AutomationProperties.Name="重新读取"/><TextBlock Text="正在显示本地快照，磁盘文件暂不可用。" FontSize="12" VerticalAlignment="Center"/></DockPanel></Border>
     <ListBox x:Name="Pages" Grid.Row="1" ItemsSource="{Binding Pieces}" ItemContainerStyle="{StaticResource ReadingItem}" Background="Transparent" BorderThickness="0" Padding="20,10,17,16" ScrollViewer.CanContentScroll="True" ScrollViewer.HorizontalScrollBarVisibility="Disabled" VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" VirtualizingPanel.ScrollUnit="Pixel" VirtualizingPanel.CacheLength="1,2" VirtualizingPanel.CacheLengthUnit="Page" local:SmoothScroll.Enabled="True" ScrollViewer.ScrollChanged="Pages_ScrollChanged" local:ReadingText.LinkRequested="Link_Requested">
-     <ListBox.ItemTemplate><DataTemplate><local:ReadingText Piece="{Binding}" TextSize="{Binding FontSizeValue, ElementName=ReaderRoot}" Leading="{Binding LeadingValue, ElementName=ReaderRoot}" Serif="{Binding SerifValue, ElementName=ReaderRoot}" MaxWidth="{Binding WidthValue, ElementName=ReaderRoot}" HorizontalAlignment="Stretch"/></DataTemplate></ListBox.ItemTemplate>
+     <ListBox.ItemTemplate><DataTemplate><local:ReadingText Piece="{Binding}" TextSize="{Binding FontSizeValue, ElementName=ReaderRoot}" Leading="{Binding LeadingValue, ElementName=ReaderRoot}" Serif="{Binding SerifValue, ElementName=ReaderRoot}" MaxWidth="{Binding WidthValue, ElementName=ReaderRoot}" HorizontalAlignment="Stretch" SelectionBrush="{DynamicResource ToneE2DCCE}"/></DataTemplate></ListBox.ItemTemplate>
     </ListBox>
     <StackPanel x:Name="Welcome" Grid.Row="1" VerticalAlignment="Center" HorizontalAlignment="Center" Margin="28" MaxWidth="420">
      <TextBlock Text="阅读" FontSize="28" Margin="0,0,0,20" HorizontalAlignment="Center"/>

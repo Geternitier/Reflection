@@ -1,13 +1,14 @@
 using System.Text;
 using System.Text.RegularExpressions;
 using Markdig;
+using Markdig.Extensions.Footnotes;
 using Markdig.Syntax;
 using Markdig.Syntax.Inlines;
 
 namespace Reflection.Core;
 
 public sealed record ReadingHeading(string Title, int Level, int Piece, string Anchor);
-public sealed record ReadingPiece(int Offset, int Length, IReadOnlyList<Block> Blocks, string? Text = null, bool Code = false, int Heading = 0, int First = 0, int Count = int.MaxValue);
+public sealed record ReadingPiece(int Offset, int Length, IReadOnlyList<Block> Blocks, string? Text = null, bool Code = false, int Heading = 0, int First = 0, int Count = int.MaxValue, string? SourcePath = null, string? MarkdownSource = null, string? CodeLanguage = null, int CodeLine = 1);
 public sealed record ReadingDocument(string Path, string Text, string Encoding, IReadOnlyList<ReadingPiece> Pieces, IReadOnlyList<ReadingHeading> Outline);
 
 // Parsing creates data only; the dispatcher materializes just the nearby pieces.
@@ -16,7 +17,9 @@ public static partial class ReaderDocuments
     public const int MaxBytes = 20 * 1024 * 1024;
     public const int PieceCharacters = 2400;
     public static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder()
-        .UsePipeTables().UseEmphasisExtras().UseAutoLinks().UseTaskLists().UseMathematics().Use<ReaderMathExtension>().DisableHtml().Build();
+        .UsePipeTables().UseEmphasisExtras().UseAutoLinks().UseTaskLists().UseMathematics()
+        .UseFootnotes().UseDefinitionLists().UseAlertBlocks().UsePreciseSourceLocation()
+        .Use<ReaderMathExtension>().Use<WikiLinkExtension>().DisableHtml().Build();
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     static ReaderDocuments() => Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
     public static bool Supported(string path) => Path.GetExtension(path).ToLowerInvariant() is ".md" or ".markdown" or ".txt";
@@ -44,6 +47,8 @@ public static partial class ReaderDocuments
             return Parse(path, text, encoding, token);
         }, token);
     }
+
+    public static MarkdownDocument ParseMarkdown(string source) => Markdown.Parse(NormalizeMath(source), Pipeline);
 
     public static ReadingDocument Parse(string path, string text, string encoding = "UTF-8", CancellationToken token = default)
     {
@@ -76,28 +81,51 @@ public static partial class ReaderDocuments
         }
         else
         {
-            var markdown = Markdown.Parse(NormalizeMath(text), Pipeline);
+            var markdown = ParseMarkdown(text);
             var group = new List<Block>(); var start = 0; var end = 0;
-            void Flush() { if (group.Count == 0) return; pieces.Add(new(start, Math.Max(1, end - start + 1), group.ToArray())); group.Clear(); }
-            foreach (var block in markdown)
+            void Flush() { if (group.Count == 0) return; pieces.Add(new(start, Math.Max(1, end - start + 1), group.ToArray(), SourcePath: path, MarkdownSource: text)); group.Clear(); }
+            // Footnote definitions remain at their source locations in the virtualized reader.
+            var blocks = markdown.Where(block => block is not LinkReferenceDefinitionGroup and not FootnoteGroup);
+            if (markdown.OfType<FootnoteGroup>().FirstOrDefault() is { } notes)
+                blocks = blocks.Concat(notes.OfType<Footnote>()).OrderBy(block => block.Span.Start);
+            foreach (var block in blocks)
             {
                 token.ThrowIfCancellationRequested();
                 if (block is HeadingBlock heading)
                 {
                     Flush(); var title = InlineText(heading.Inline);
-                    var anchor = Regex.Replace(title.ToLowerInvariant(), @"[^\p{L}\p{N}\s_-]", "").Trim().Replace(' ', '-');
+                    var anchor = HeadingAnchor(title);
                     var duplicate = headings.Count(h => h.Anchor == anchor || h.Anchor.StartsWith(anchor + "-", StringComparison.Ordinal));
                     headings.Add(new(title, heading.Level, pieces.Count, duplicate == 0 ? anchor : anchor + "-" + duplicate));
                 }
-                if (group.Count > 0 && block.Span.End - start > PieceCharacters) Flush();
-                if (block is CodeBlock code && block.Span.Length > PieceCharacters)
+                if (block is Footnote)
                 {
-                    Flush(); var content = code.Lines.ToString();
+                    Flush();
+                    pieces.Add(new(block.Span.Start, Math.Max(1, block.Span.Length), [block], SourcePath: path, MarkdownSource: text));
+                    continue;
+                }
+                if (group.Count > 0 && block.Span.End - start > PieceCharacters) Flush();
+                if (block is CodeBlock code && (block.Span.Length > PieceCharacters || code.Lines.Count > 80))
+                {
+                    Flush(); var content = code.Lines.ToString(); var line = 1;
                     for (var pos = 0; pos < content.Length;)
                     {
                         var take = Math.Min(PieceCharacters, content.Length - pos);
                         if (pos + take < content.Length && char.IsHighSurrogate(content[pos + take - 1])) take--;
-                        pieces.Add(new(block.Span.Start + pos, take, [], content.Substring(pos, take), true)); pos += take;
+                        // Bound the number of native list items in each numbered code piece.
+                        var scan = pos;
+                        for (var row = 0; row < 80 && scan < pos + take; row++)
+                        {
+                            var next = content.IndexOf('\n', scan, pos + take - scan);
+                            if (next < 0) break;
+                            scan = next + 1;
+                            if (row == 79) take = scan - pos;
+                        }
+                        var newline = content.LastIndexOf('\n', pos + take - 1, take);
+                        if (pos + take < content.Length && newline >= pos) take = newline - pos + 1;
+                        var chunk = content.Substring(pos, take);
+                        pieces.Add(new(block.Span.Start + pos, take, [], chunk, true, CodeLanguage: (code as FencedCodeBlock)?.Info, CodeLine: line));
+                        line += chunk.Count(c => c == '\n'); pos += take;
                     }
                     continue;
                 }
@@ -105,14 +133,14 @@ public static partial class ReaderDocuments
                 {
                     Flush();
                     for (var row = 1; row < table.Count; row += 24)
-                        pieces.Add(new(table[row].Span.Start, Math.Max(1, table[Math.Min(table.Count - 1, row + 23)].Span.End - table[row].Span.Start + 1), [table], First: row, Count: 24));
+                        pieces.Add(new(table[row].Span.Start, Math.Max(1, table[Math.Min(table.Count - 1, row + 23)].Span.End - table[row].Span.Start + 1), [table], First: row, Count: 24, SourcePath: path, MarkdownSource: text));
                     continue;
                 }
                 if (block is ListBlock list && list.Count > 24)
                 {
                     Flush();
                     for (var row = 0; row < list.Count; row += 24)
-                        pieces.Add(new(list[row].Span.Start, Math.Max(1, list[Math.Min(list.Count - 1, row + 23)].Span.End - list[row].Span.Start + 1), [list], First: row, Count: 24));
+                        pieces.Add(new(list[row].Span.Start, Math.Max(1, list[Math.Min(list.Count - 1, row + 23)].Span.End - list[row].Span.Start + 1), [list], First: row, Count: 24, SourcePath: path, MarkdownSource: text));
                     continue;
                 }
                 if (block is ParagraphBlock && block.Span.Length > PieceCharacters * 2)
@@ -122,7 +150,8 @@ public static partial class ReaderDocuments
                     {
                         var take = Math.Min(PieceCharacters, raw.Length - pos);
                         if (pos + take < raw.Length && char.IsHighSurrogate(raw[pos + take - 1])) take--;
-                        pieces.Add(new(block.Span.Start + pos, take, Markdown.Parse(NormalizeMath(raw.Substring(pos, take)), Pipeline).ToArray())); pos += take;
+                        var chunk = raw.Substring(pos, take);
+                        pieces.Add(new(block.Span.Start + pos, take, ParseMarkdown(chunk).ToArray(), SourcePath: path, MarkdownSource: chunk)); pos += take;
                     }
                     continue;
                 }
@@ -134,6 +163,9 @@ public static partial class ReaderDocuments
         if (pieces.Count == 0) pieces.Add(new(0, 0, [], "这是一篇空文档。"));
         return new(path, text, encoding, pieces, headings);
     }
+    public static string HeadingAnchor(string title) =>
+        Regex.Replace(title.ToLowerInvariant(), @"[^\p{L}\p{N}\s_-]", "").Trim().Replace(' ', '-');
+
     public static string InlineText(ContainerInline? inline)
     {
         if (inline is null) return "";
@@ -143,6 +175,33 @@ public static partial class ReaderDocuments
             else if (child is CodeInline code) result.Append(code.Content);
             else if (child is ContainerInline container) result.Append(InlineText(container));
         return result.ToString();
+    }
+
+    public static string? ResolveImagePath(string? sourcePath, string? reference)
+    {
+        if (string.IsNullOrWhiteSpace(sourcePath) || string.IsNullOrWhiteSpace(reference)) return null;
+        try
+        {
+            var suffix = reference.AsSpan().IndexOfAny('#', '?');
+            var path = suffix < 0 ? reference : reference[..suffix];
+            if (path.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!Uri.TryCreate(path, UriKind.Absolute, out var uri) || !uri.IsFile || uri.IsUnc || uri.Host.Length != 0) return null;
+                path = uri.LocalPath;
+            }
+            else path = Uri.UnescapeDataString(path);
+
+            if (path.Length == 0 || path.StartsWith(@"\\", StringComparison.Ordinal) || path.StartsWith("//", StringComparison.Ordinal)) return null;
+            var colon = path.IndexOf(':');
+            if (colon >= 0 && (colon != 1 || !char.IsAsciiLetter(path[0]) || !Path.IsPathFullyQualified(path) || path.IndexOf(':', 2) >= 0))
+                return null;
+            if (Path.IsPathRooted(path) && !Path.IsPathFullyQualified(path)) return null;
+            var full = Path.GetFullPath(path, Path.GetDirectoryName(Path.GetFullPath(sourcePath))!);
+            var root = Path.GetPathRoot(full);
+            return root is { Length: 3 } && root[1] == ':' && Path.GetExtension(full).ToLowerInvariant() is
+                ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp" or ".tif" or ".tiff" or ".webp" ? full : null;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException) { return null; }
     }
     // Equal-length substitutions preserve source offsets used by reading anchors.
     private static string NormalizeMath(string text)

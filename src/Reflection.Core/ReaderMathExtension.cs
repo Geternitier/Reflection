@@ -4,6 +4,7 @@ using Markdig.Helpers;
 using Markdig.Parsers;
 using Markdig.Renderers;
 using Markdig.Syntax;
+using Markdig.Syntax.Inlines;
 
 namespace Reflection.Core;
 
@@ -19,10 +20,18 @@ internal sealed class ReaderMathExtension : IMarkdownExtension
     public void Setup(MarkdownPipeline pipeline, IMarkdownRenderer renderer) { }
     private sealed class AdjacentMathParser : InlineParser
     {
-        public AdjacentMathParser() => OpeningCharacters = ['$'];
+        public AdjacentMathParser() => OpeningCharacters = ['$', '\\'];
         public override bool Match(InlineProcessor processor, ref StringSlice slice)
         {
             var text = slice.Text; var start = slice.Start;
+            if (text[start] == '\\')
+            {
+                // Complete TeX delimiters have already been normalized. Keep an incomplete one visible during streaming.
+                if (start == slice.End || text[start + 1] is not ('(' or '[')) return false;
+                processor.Inline = new LiteralInline(new StringSlice(text, start, start + 1));
+                slice.Start += 2;
+                return true;
+            }
             if (start > 0 && text[start - 1] == '$' || start >= slice.End) return false;
             var count = text[start + 1] == '$' ? 2 : 1;
             var content = start + count;

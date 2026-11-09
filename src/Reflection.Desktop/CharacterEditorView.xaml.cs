@@ -8,7 +8,7 @@ namespace Reflection.Desktop;
 
 public partial class CharacterEditorView : UserControl
 {
-    private ChatImage? image;
+    private ChatImage? image, avatar;
     private CancellationTokenSource? imageCancellation;
     private TaskCompletionSource? imageWorkCompleted;
     internal void CancelImageWork() { imageCancellation?.Cancel(); }
@@ -20,6 +20,7 @@ public partial class CharacterEditorView : UserControl
     internal CharacterCard? Original { get; private set; }
     internal CharacterCard? Result { get; private set; }
     internal ChatImage? DraftImage => image;
+    internal ChatImage? DraftAvatar => avatar;
     public event EventHandler? SaveRequested;
     public event EventHandler? CancelRequested;
     public CharacterEditorView()
@@ -47,20 +48,24 @@ public partial class CharacterEditorView : UserControl
         NameField.Text = original?.Name ?? ""; DescriptionField.Text = original?.Description ?? "";
         SettingField.Text = original?.Setting ?? ""; GreetingField.Text = original?.Greeting ?? "";
         SystemField.Text = original?.SystemPrompt ?? ""; OpeningRoleField.SelectedIndex = original?.OpeningRole == "user" ? 1 : 0;
-        image = original?.Image; RefreshImage(); FormScroll.ScrollToTop();
+        image = original?.Image; avatar = original?.Avatar; RefreshImages(); FormScroll.ScrollToTop();
         InputValidation.SetHasError(NameField, false); InputValidation.SetHasError(SystemField, false);
     }
-    private void RefreshImage()
+    private void RefreshImages()
     {
         AvatarPreview.Child = image is null ? null : new AssetImage { Picture = image, DecodeSize = 640, Stretch = Stretch.UniformToFill };
         CropCurrentButton.IsEnabled = image is not null;
         AvatarPlaceholder.Visibility = image is null ? Visibility.Visible : Visibility.Collapsed;
+        ConversationAvatarPreview.Content = avatar ?? image;
+        CropAvatarButton.Content = avatar is null ? "从封面裁剪" : "调整头像";
+        CropAvatarButton.IsEnabled = avatar is not null || image is not null;
+        RemoveAvatarButton.IsEnabled = avatar is not null;
     }
     internal void SetDropHighlight(bool active)
     {
         AvatarDropZone.SetResourceReference(Border.BorderBrushProperty, active ? "Accent" : "Line");
     }
-    private async Task<bool> EditImageAsync(Func<MainWindow, CancellationToken, Task<ChatImage?>> work)
+    private async Task<bool> EditImageAsync(Func<MainWindow, CancellationToken, Task<ChatImage?>> work, bool forAvatar = false)
     {
         if (Window.GetWindow(this) is not MainWindow owner) return false;
         CancelImageWork();
@@ -72,7 +77,8 @@ public partial class CharacterEditorView : UserControl
             var result = await work(owner, cancel.Token);
             cancel.Token.ThrowIfCancellationRequested();
             if (result is null) return false;
-            image = result; RefreshImage(); ErrorText.Text = ""; return true;
+            if (forAvatar) avatar = result; else image = result;
+            RefreshImages(); ErrorText.Text = ""; return true;
         }
         catch (OperationCanceledException) { return false; }
         catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException or InvalidOperationException or FormatException)
@@ -83,7 +89,7 @@ public partial class CharacterEditorView : UserControl
             completed.TrySetResult(); cancel.Dispose();
         }
     }
-    internal Task<bool> ReceiveImageDropAsync(IDataObject data)
+    internal Task<bool> ReceiveImageDropAsync(IDataObject data, bool forAvatar = false)
     {
         IReadOnlyList<ImageInput> inputs;
         try { inputs = ImageDrop.Capture(data, 1); }
@@ -93,8 +99,8 @@ public partial class CharacterEditorView : UserControl
         return EditImageAsync(async (owner, ct) =>
         {
             var original = await owner.VM.Images.ImportAsync(inputs[0], ct);
-            return await CharacterImageCropper.ShowAsync(owner, original, ct);
-        });
+            return await CharacterImageCropper.ShowAsync(owner, original, ct, avatar: forAvatar);
+        }, forAvatar);
     }
     internal bool TryBuildResult()
     {
@@ -102,15 +108,17 @@ public partial class CharacterEditorView : UserControl
         Result = null; ErrorText.Text = ""; InputValidation.SetHasError(NameField, false); InputValidation.SetHasError(SystemField, false);
         if (string.IsNullOrWhiteSpace(NameField.Text)) { Fail(NameField, "请填写角色名称。"); return false; }
         if (SystemField.Text.Trim().Length > 20000) { Fail(SystemField, "系统提示词不能超过 20000 字。"); return false; }
-        Result = new CharacterCard { Id = Original?.Id ?? Guid.NewGuid(), Name = NameField.Text.Trim(), Description = DescriptionField.Text.Trim(), Setting = SettingField.Text.Trim(), Greeting = GreetingField.Text.Trim(), OpeningRole = OpeningRoleField.SelectedIndex == 1 ? "user" : "assistant", SystemPrompt = SystemField.Text.Trim(), Image = image };
+        Result = new CharacterCard { Id = Original?.Id ?? Guid.NewGuid(), Name = NameField.Text.Trim(), Description = DescriptionField.Text.Trim(), Setting = SettingField.Text.Trim(), Greeting = GreetingField.Text.Trim(), OpeningRole = OpeningRoleField.SelectedIndex == 1 ? "user" : "assistant", SystemPrompt = SystemField.Text.Trim(), Image = image, Avatar = avatar };
         return true;
     }
     private void Fail(TextBox field, string message) { ErrorText.Text = message; InputValidation.SetHasError(field, true); field.BringIntoView(); field.Focus(); }
-    private async void PickImage_Click(object sender, RoutedEventArgs e)
+    private async void PickImage_Click(object sender, RoutedEventArgs e) => await PickImageAsync(forAvatar: false);
+    private async void PickAvatar_Click(object sender, RoutedEventArgs e) => await PickImageAsync(forAvatar: true);
+    private async Task PickImageAsync(bool forAvatar)
     {
         if (Window.GetWindow(this) is not MainWindow owner) return;
-        var paths = await FileDialogs.PickAsync(owner, "选择角色图片", new[] { ".png", ".jpg", ".jpeg", ".webp", ".bmp" });
-        if (paths is not null) await ReceiveImageDropAsync(new DataObject(DataFormats.FileDrop, paths));
+        var paths = await FileDialogs.PickAsync(owner, forAvatar ? "选择角色头像" : "选择角色封面", new[] { ".png", ".jpg", ".jpeg", ".webp", ".bmp" });
+        if (paths is not null) await ReceiveImageDropAsync(new DataObject(DataFormats.FileDrop, paths), forAvatar);
     }
     private async void RecropImage_Click(object sender, RoutedEventArgs e)
     {
@@ -121,7 +129,19 @@ public partial class CharacterEditorView : UserControl
             return await CharacterImageCropper.ShowAsync(owner, original, ct);
         });
     }
-    private void RemoveImage_Click(object sender, RoutedEventArgs e) { CancelImageWork(); image = null; RefreshImage(); }
+    private async void RecropAvatar_Click(object sender, RoutedEventArgs e)
+    {
+        if ((avatar ?? image) is not { } current) return;
+        var source = current.Snapshot();
+        if (avatar is null) source.Crop = null;
+        await EditImageAsync(async (owner, ct) =>
+        {
+            var original = await owner.VM.Images.NormalizeAsync(source, ct);
+            return await CharacterImageCropper.ShowAsync(owner, original, ct, avatar: true);
+        }, forAvatar: true);
+    }
+    private void RemoveImage_Click(object sender, RoutedEventArgs e) { CancelImageWork(); image = null; RefreshImages(); }
+    private void RemoveAvatar_Click(object sender, RoutedEventArgs e) { CancelImageWork(); avatar = null; RefreshImages(); }
     private void Save_Click(object sender, RoutedEventArgs e) { if (TryBuildResult()) SaveRequested?.Invoke(this, EventArgs.Empty); }
     private void Cancel_Click(object sender, RoutedEventArgs e) => CancelRequested?.Invoke(this, EventArgs.Empty);
 }

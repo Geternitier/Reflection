@@ -45,7 +45,22 @@
   <Grid Grid.Column="2" Background="{DynamicResource Surface}">
    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" shell:WindowChrome.IsHitTestVisibleInChrome="True">
     <TextBlock x:Name="PrivateModeIndicator" Text="隐私模式" Visibility="Collapsed" FontSize="11" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" Margin="0,0,12,0"/><Button Style="{StaticResource CaptionButton}" ToolTip="最小化" AutomationProperties.Name="最小化" Content="{StaticResource IconMinimize}" Click="Minimize_Click"/>
-    <Button Style="{StaticResource CaptionButton}" ToolTip="最大化或还原" AutomationProperties.Name="最大化或还原" Content="{StaticResource IconMaximize}" Click="Maximize_Click"/>
+    <Button x:Name="MaximizeWindowButton" Click="Maximize_Click">
+     <Button.Style>
+      <Style TargetType="Button" BasedOn="{StaticResource CaptionButton}">
+       <Setter Property="Content" Value="{StaticResource IconMaximize}"/>
+       <Setter Property="ToolTip" Value="最大化"/>
+       <Setter Property="AutomationProperties.Name" Value="最大化"/>
+       <Style.Triggers>
+        <DataTrigger Binding="{Binding WindowState, RelativeSource={RelativeSource AncestorType={x:Type Window}}}" Value="Maximized">
+         <Setter Property="Content" Value="{StaticResource IconRestore}"/>
+         <Setter Property="ToolTip" Value="还原"/>
+         <Setter Property="AutomationProperties.Name" Value="还原"/>
+        </DataTrigger>
+       </Style.Triggers>
+      </Style>
+     </Button.Style>
+    </Button>
     <Button x:Name="CloseWindowButton" Style="{StaticResource CaptionButton}" ToolTip="关闭" AutomationProperties.Name="关闭" Content="{StaticResource IconClose}" Click="Close_Click"/>
    </StackPanel>
   </Grid>
@@ -73,10 +88,15 @@
       <ListBox.Style><Style TargetType="ListBox" BasedOn="{StaticResource {x:Type ListBox}}"><Style.Triggers><DataTrigger Binding="{Binding IsEmpty}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers></Style></ListBox.Style>
       <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="Padding" Value="0"/><Setter Property="Margin" Value="0"/><Setter Property="Focusable" Value="False"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem"><ContentPresenter/></ControlTemplate></Setter.Value></Setter></Style></ListBox.ItemContainerStyle>
       <ListBox.ItemTemplate><DataTemplate>
-       <Grid x:Name="MessageRow" MaxWidth="800" HorizontalAlignment="Stretch" Margin="0,6,0,18"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-        <Grid x:Name="UserMessageArea" Background="Transparent"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+       <Grid x:Name="MessageRow" MaxWidth="800" HorizontalAlignment="Stretch" Margin="0,6,0,18">
+        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+        <ContentControl x:Name="RoleAvatar" Width="36" Height="36" VerticalAlignment="Top" Margin="0,12,0,0" Visibility="Collapsed" Focusable="False"
+                        Template="{StaticResource RoundCharacterAvatar}" Content="{Binding DataContext.CharacterAvatar, RelativeSource={RelativeSource AncestorType=ListBox}}"/>
+        <Grid x:Name="UserMessageArea" Grid.Column="1" Background="Transparent"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
         <Border x:Name="Bubble" Background="Transparent" CornerRadius="18" Padding="24,20" BorderBrush="{DynamicResource Line}" BorderThickness="0" HorizontalAlignment="Stretch">
          <StackPanel>
+          <TextBlock x:Name="RoleMessageName" Text="{Binding DataContext.CharacterName, RelativeSource={RelativeSource AncestorType=ListBox}}"
+                     Visibility="Collapsed" FontSize="13" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" Margin="0,0,0,6"/>
           <TextBlock Text="开场" FontSize="12" Foreground="{DynamicResource Accent}" Margin="0,0,0,8"><TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding Opening}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></TextBlock.Style></TextBlock>
           <ItemsControl ItemsSource="{Binding Images}" Margin="0,0,0,8"><ItemsControl.Style><Style TargetType="ItemsControl"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding HasImages}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></ItemsControl.Style><ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel><ItemsControl.ItemTemplate><DataTemplate><Button Margin="0,0,8,8" Padding="0" Click="ZoomImage_Click" BorderThickness="0" ToolTip="查看原图；右键可再次引用" AutomationProperties.Name="查看消息图片"><Button.ContextMenu><ContextMenu Style="{StaticResource ImageReuseMenu}" DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}"><MenuItem Style="{StaticResource ImageReuseMenuItem}" Header="再次引用此图片" Click="ReuseImage_Click"/></ContextMenu></Button.ContextMenu><local:AssetImage Picture="{Binding}" Width="180" Height="120" Stretch="UniformToFill"/></Button></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
           <Expander local:ThinkingExpansion.Active="{Binding IsThinking}" Header="思考" Margin="0,0,0,8"><Expander.Style><Style TargetType="Expander" BasedOn="{StaticResource {x:Type Expander}}"><Setter Property="Visibility" Value="Collapsed"/><Setter Property="IsExpanded" Value="False"/><Style.Triggers><DataTrigger Binding="{Binding HasThinking}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></Expander.Style><TextBlock Text="{Binding Thinking}" FontSize="13" Foreground="{DynamicResource Muted}"/></Expander>
@@ -95,10 +115,16 @@
         </Grid>
        </Grid>
        <DataTemplate.Triggers>
+        <MultiDataTrigger><MultiDataTrigger.Conditions><Condition Binding="{Binding Role}" Value="assistant"/><Condition Binding="{Binding DataContext.HasChatCharacter, RelativeSource={RelativeSource AncestorType=ListBox}}" Value="True"/></MultiDataTrigger.Conditions>
+         <Setter TargetName="RoleAvatar" Property="Visibility" Value="Visible"/><Setter TargetName="RoleMessageName" Property="Visibility" Value="Visible"/><Setter TargetName="Bubble" Property="Padding" Value="10,12,24,20"/>
+        </MultiDataTrigger>
         <DataTrigger Binding="{Binding Incomplete}" Value="True"><Setter TargetName="EditMessage" Property="Visibility" Value="Collapsed"/></DataTrigger>
         <DataTrigger Binding="{Binding IsTail}" Value="True"><Setter TargetName="ContinueMessage" Property="Visibility" Value="Visible"/><Setter TargetName="RegenMessage" Property="Visibility" Value="Visible"/></DataTrigger>
         <DataTrigger Binding="{Binding Role}" Value="user"><Setter TargetName="UserMessageArea" Property="HorizontalAlignment" Value="Right"/><Setter TargetName="UserMessageArea" Property="MaxWidth" Value="520"/><Setter TargetName="Bubble" Property="HorizontalAlignment" Value="Right"/><Setter TargetName="Bubble" Property="MaxWidth" Value="520"/><Setter TargetName="Bubble" Property="Background" Value="{DynamicResource UserBubble}"/><Setter TargetName="Bubble" Property="Padding" Value="18,12"/><Setter TargetName="Bubble" Property="BorderThickness" Value="0"/><Setter TargetName="MessageActions" Property="Visibility" Value="Collapsed"/><Setter TargetName="ContinueMessage" Property="Visibility" Value="Collapsed"/><Setter TargetName="RegenMessage" Property="Visibility" Value="Collapsed"/><Setter TargetName="UserActions" Property="Visibility" Value="Hidden"/></DataTrigger>
         <MultiDataTrigger><MultiDataTrigger.Conditions><Condition Binding="{Binding Role}" Value="user"/><Condition Binding="{Binding IsMouseOver, ElementName=UserMessageArea}" Value="True"/></MultiDataTrigger.Conditions><Setter TargetName="UserActions" Property="Visibility" Value="Visible"/></MultiDataTrigger>
+        <MultiDataTrigger><MultiDataTrigger.Conditions><Condition Binding="{Binding Role}" Value="user"/><Condition Binding="{Binding HasImages}" Value="False"/></MultiDataTrigger.Conditions>
+         <Setter TargetName="Markdown" Property="FitShortLine" Value="True"/>
+        </MultiDataTrigger>
         <DataTrigger Binding="{Binding Incomplete}" Value="True"><Setter TargetName="UserEdit" Property="Visibility" Value="Collapsed"/></DataTrigger>
        </DataTemplate.Triggers>
       </DataTemplate></ListBox.ItemTemplate>
@@ -112,7 +138,7 @@
        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
 
 
-       <TextBox Grid.Row="0" x:Name="Composer" Tag="输入消息…" ToolTip="Enter 发送，Shift+Enter 换行" Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}" MinHeight="58" MaxHeight="150" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" BorderThickness="0" Padding="2,6" FontSize="13" PreviewKeyDown="Composer_KeyDown" DataObject.Pasting="Composer_Pasting" IsEnabled="{Binding Idle}" AutomationProperties.Name="输入消息"/>
+       <TextBox Grid.Row="0" x:Name="Composer" Tag="输入消息…" Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}" MinHeight="58" MaxHeight="150" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" BorderThickness="0" Padding="2,6" FontSize="13" PreviewKeyDown="Composer_KeyDown" DataObject.Pasting="Composer_Pasting" IsEnabled="{Binding Idle}" AutomationProperties.Name="输入消息"/>
        <DockPanel Grid.Row="1" Margin="0,10,0,0">
         <Button Style="{StaticResource SendIconButton}" ToolTip="{Binding SendLabel}" AutomationProperties.Name="{Binding SendLabel}" DockPanel.Dock="Right" Click="Send_Click" Margin="8,0,0,0"/>
         <Button Style="{StaticResource IconButton}" ToolTip="辅助起草" AutomationProperties.Name="辅助起草" DockPanel.Dock="Right" Content="{StaticResource IconHelp}" Click="Help_Click" Margin="8,0,0,0"/>
@@ -121,7 +147,14 @@
          <Button Style="{StaticResource IconButton}" ToolTip="添加图片" AutomationProperties.Name="添加图片" Content="{StaticResource IconImage}" Click="AddImage_Click" IsEnabled="{Binding Idle}"/>
          <ToggleButton Style="{StaticResource ReasonChip}" x:Name="ReasonToggle" Checked="ReasonToggle_Checked" Content="{Binding ReasonLabel}" ToolTip="推理强度" AutomationProperties.Name="推理强度" Height="30" Padding="0" Margin="10,0,0,0" FontSize="11"/>
          <Border Width="1" Height="16" Background="{DynamicResource ToneE6E1D7}" Margin="12,0,0,0" VerticalAlignment="Center"/>
-         <ComboBox x:Name="ModelPicker" Style="{StaticResource ComposerSelect}" ItemsSource="{Binding Models}" SelectedItem="{Binding SelectedModel}" ItemTemplate="{StaticResource ModelOptionTemplate}" Width="210" MinHeight="30" Margin="10,0,0,0" Tag="连接本地模型" ToolTip="选择本地模型" AutomationProperties.Name="选择模型" IsEnabled="{Binding Idle}"/>
+         <StackPanel Orientation="Horizontal">
+          <ComboBox x:Name="ModelPicker" Style="{StaticResource ComposerSelect}" ItemsSource="{Binding Models}" SelectedItem="{Binding SelectedModel}" ItemTemplate="{StaticResource ModelOptionTemplate}" Width="210" MinHeight="30" Margin="10,0,0,0" Tag="连接本地模型" ToolTip="选择本地模型" AutomationProperties.Name="选择模型" IsEnabled="{Binding Idle}"/>
+          <TextBlock x:Name="TokenSpeedReadout" Text="{Binding TokenSpeed}" ToolTip="{Binding TokenSpeedHint}" AutomationProperties.Name="{Binding TokenSpeedHint}" Foreground="{DynamicResource Muted}" FontSize="11" VerticalAlignment="Center" Margin="12,0,0,0"/>
+          <Button x:Name="ContextButton" Style="{StaticResource Quiet}" Width="30" Height="30" Padding="0" Margin="7,0,0,0"
+                  VerticalAlignment="Center" IsEnabled="{Binding Idle}" ToolTip="{Binding ContextRingHint}" AutomationProperties.Name="{Binding ContextControlName}" Click="ContextButton_Click">
+           <local:ContextRing x:Name="ContextUsageRing" Width="20" Height="20" Value="{Binding ContextFraction}" Track="{DynamicResource Line}" Fill="{DynamicResource Accent}"/>
+          </Button>
+         </StackPanel>
         </WrapPanel>
        </DockPanel>
        <Border x:Name="ComposerDropHint" Grid.RowSpan="2" Background="{DynamicResource ToneF5F1E8}" CornerRadius="12" BorderBrush="{DynamicResource Coral}" BorderThickness="1" Visibility="Collapsed" IsHitTestVisible="False"><TextBlock Text="释放以添加图片" Foreground="{DynamicResource Tone836D58}" FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>

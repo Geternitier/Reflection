@@ -87,6 +87,7 @@ public partial class App : Application
             await window.VerifyImageAssetsAsync(output);
             await window.VerifyComponentsAsync(output);
             await window.VerifyMathAndFilesAsync(output);
+            await window.VerifyMarkdownExtensionsAsync(output);
             await window.VerifyAppearanceAndTablesAsync(output);
             await window.VerifyPortraitsAndHistoryAsync(output);
             await window.VerifyGenerationNavigationAsync(output);

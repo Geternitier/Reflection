@@ -9,7 +9,7 @@ public static class ConversationOperations
     {
         Id = card.Id, Name = card.Name, Description = card.Description, SystemPrompt = card.SystemPrompt,
         Setting = card.Setting, Greeting = card.Greeting, OpeningRole = card.OpeningRole,
-        Image = card.Image is null ? null : card.Image.Snapshot()
+        Image = card.Image?.Snapshot(), Avatar = card.Avatar?.Snapshot()
     };
 
     public static bool RefreshCharacter(Conversation chat, CharacterCard card)
@@ -28,7 +28,7 @@ public static class ConversationOperations
     public static Conversation Snapshot(Conversation chat) => new()
     {
         Id = chat.Id, Title = chat.Title, CharacterId = chat.CharacterId, CharacterSnapshot = Snapshot(chat.CharacterSnapshot),
-        ServiceId = chat.ServiceId, Model = chat.Model, UpdatedAt = chat.UpdatedAt, Draft = chat.Draft,
+        ServiceId = chat.ServiceId, Model = chat.Model, ContextWindowOverride = chat.ContextWindowOverride, UpdatedAt = chat.UpdatedAt, Draft = chat.Draft,
         Attachments = new(chat.Attachments.Select(x => x.Snapshot())),
         Messages = new(chat.Messages.Select(x => new ChatMessage
         {

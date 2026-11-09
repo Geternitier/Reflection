@@ -301,7 +301,7 @@ public partial class ReaderView : UserControl, INotifyPropertyChanged
         var close = toggle && InspectorPanel.IsVisible && typographyOpen == typography;
         typographyOpen = typography; outlineOverride = !close; focus = false; UpdatePanels();
     }
-    private void Focus_Click(object sender, RoutedEventArgs e) { focus = !focus; state.FocusMode = focus; UpdatePanels(); _ = SaveQuietlyAsync(); }
+    private void ToggleFocusMode() { focus = !focus; state.FocusMode = focus; UpdatePanels(); _ = SaveQuietlyAsync(); }
     private void UpdatePanels()
     {
         var showLibrary = libraryOpen && !focus;
@@ -313,8 +313,6 @@ public partial class ReaderView : UserControl, INotifyPropertyChanged
         InspectorPanel.Visibility = showOutline ? Visibility.Visible : Visibility.Collapsed;
         OutlinePanel.Visibility = showOutline && !typographyOpen ? Visibility.Visible : Visibility.Collapsed;
         SettingsPanel.Visibility = showOutline && typographyOpen ? Visibility.Visible : Visibility.Collapsed;
-        FocusButton.ToolTip = focus ? "退出专注 · F11" : "专注阅读 · F11";
-        FocusButton.SetResourceReference(BackgroundProperty, focus ? "AccentSoft" : "Surface");
     }
     private void Typography_Changed(object sender, RoutedPropertyChangedEventArgs<double> e) { if (settingsReady) { typographyTimer.Stop(); typographyTimer.Start(); } }
     private void Typography_Click(object sender, RoutedEventArgs e) { if (settingsReady) { typographyTimer.Stop(); typographyTimer.Start(); } }
@@ -343,32 +341,50 @@ public partial class ReaderView : UserControl, INotifyPropertyChanged
     private void Copy_Click(object sender, RoutedEventArgs e) { if (document is null) return; try { Clipboard.SetText(document.Text); Status = "已复制全文。"; } catch (System.Runtime.InteropServices.ExternalException) { Status = "剪贴板暂不可用，请重试。"; } }
     private async void Link_Requested(object sender, RoutedEventArgs e)
     {
-        if (e.OriginalSource is not ReadingText { RequestedLink: { } link } || document is null) return;
+        if (e.OriginalSource is not ReadingText text || document is null) return;
+        if (text.RequestedFootnoteOffset is { } offset)
+        {
+            e.Handled = true;
+            await RestorePositionAsync(new(offset, 0));
+            return;
+        }
+        if (text.RequestedLink is not { } link) return;
         try
         {
             if (link.StartsWith('#'))
             {
-                var heading = document.Outline.FirstOrDefault(h => h.Anchor == Uri.UnescapeDataString(link[1..]));
-                if (heading is not null) { OutlineList.SelectedItem = heading; }
+                await JumpToHeadingAsync(link[1..]);
                 return;
             }
             if (Uri.TryCreate(link, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https" or "mailto")
             { Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true }); return; }
             if (Uri.TryCreate(link, UriKind.Absolute, out uri) && !uri.IsFile) { Status = "此链接类型不受支持。"; return; }
             var path = uri?.IsFile == true ? uri.LocalPath : Path.GetFullPath(Path.Combine(Path.GetDirectoryName(document.Path)!, Uri.UnescapeDataString(link.Split('#')[0])));
-            if (ReaderDocuments.Supported(path)) await OpenDocumentAsync(path); else Status = "仅打开 Markdown 和 TXT 文档链接。";
+            if (!ReaderDocuments.Supported(path)) { Status = "仅打开 Markdown 和 TXT 文档链接。"; return; }
+            var fragment = link.IndexOf('#');
+            await OpenDocumentAsync(path);
+            if (fragment >= 0 && string.Equals(document?.Path, path, StringComparison.OrdinalIgnoreCase))
+                await JumpToHeadingAsync(link[(fragment + 1)..]);
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or System.ComponentModel.Win32Exception or UriFormatException) { Status = ex.Message; }
     }
+    private async Task JumpToHeadingAsync(string fragment)
+    {
+        if (document is not { } current) return;
+        var anchor = ReaderDocuments.HeadingAnchor(Uri.UnescapeDataString(fragment));
+        var heading = current.Outline.FirstOrDefault(h => h.Anchor.Equals(anchor, StringComparison.OrdinalIgnoreCase));
+        if (heading is not null) await RestorePositionAsync(new(current.Pieces[heading.Piece].Offset, 0));
+    }
+
     private void KeyPressed(object sender, KeyEventArgs e)
     {
         if (e.Handled) return;
         if (e.Key == Key.O && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
         { if (Keyboard.Modifiers.HasFlag(ModifierKeys.Shift)) Folder_Click(this, new()); else Open_Click(this, new()); e.Handled = true; }
         else if (e.Key == Key.K && Keyboard.Modifiers == ModifierKeys.Control) { libraryOpen = true; focus = false; outlineOverride = false; UpdatePanels(); NameFilter.Focus(); NameFilter.SelectAll(); e.Handled = true; }
-        else if (e.Key == Key.F11) { Focus_Click(this, new()); e.Handled = true; }
+        else if (e.Key == Key.F11) { ToggleFocusMode(); e.Handled = true; }
         else if (e.Key == Key.Escape && InspectorPanel.IsVisible) { InspectorClose_Click(this, new()); e.Handled = true; }
-        else if (e.Key == Key.Escape && focus) { Focus_Click(this, new()); e.Handled = true; }
+        else if (e.Key == Key.Escape && focus) { ToggleFocusMode(); e.Handled = true; }
         else if (Keyboard.FocusedElement is not System.Windows.Controls.Primitives.TextBoxBase || Keyboard.FocusedElement is ReadingText)
         {
             if (Keyboard.Modifiers is not (ModifierKeys.None or ModifierKeys.Control)) return;
