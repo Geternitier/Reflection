@@ -615,6 +615,9 @@ await Test("Reader shares explicit math boundaries and keeps cross-piece formula
     Check(ReaderDocuments.ParseMarkdown(explicitMath).Descendants<MathInline>().Count() == 6);
     Check(MessageMarkupTokenizer.Tokenize(explicitMath).Count(token =>
         token.Kind is MarkupKind.InlineMath or MarkupKind.DisplayMath) == 6);
+    const string chineseUnit = @"$2\text{米}$，另有价格 $5 和 $10。";
+    Check(ReaderDocuments.ParseMarkdown(chineseUnit).Descendants<MathInline>().Single().Content.ToString() == @"2\text{米}");
+    Check(MessageMarkupTokenizer.Tokenize(chineseUnit).Single(token => token.Kind == MarkupKind.InlineMath).Text == @"2\text{米}");
     const string currency = "价格 $5 和 $10；$10.20 与 $20.50。";
     Check(!ReaderDocuments.ParseMarkdown(currency).Descendants<MathInline>().Any());
     Check(!MessageMarkupTokenizer.Tokenize(currency).Any(token =>

@@ -154,8 +154,9 @@ public partial class MarkdownText : RichTextBox
         if (FormulaRasterCache.TryGet(key, out var cached)) return UseRaster(cached, source);
         var color = ((SolidColorBrush)Application.Current.FindResource("Ink")).Color;
         var size = block ? fontSize + 1 : fontSize;
+        var containsHan = FormulaCompatibility.ContainsHan(source);
         string? error = null;
-        if (!contextual)
+        if (!contextual && !containsHan)
         {
             try
             {
@@ -180,7 +181,7 @@ public partial class MarkdownText : RichTextBox
             }
             catch (Exception ex) when (ex is not OutOfMemoryException) { error = ex.Message; }
         }
-        if (!contextual && !FormulaCompatibility.Supports(source))
+        if (!contextual && !containsHan && !FormulaCompatibility.Supports(source))
         {
             FormulaError += source + ": " + error + "\n";
             return null;

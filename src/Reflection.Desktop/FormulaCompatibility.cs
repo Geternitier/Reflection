@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Windows.Media;
@@ -20,7 +21,22 @@ internal static partial class FormulaCompatibility
     private static readonly SemaphoreSlim worker = new(1);
     private static readonly Lazy<Engine> engine = new(CreateEngine, LazyThreadSafetyMode.PublicationOnly);
     private static readonly ConditionalWeakTable<ReaderFormulaIndex, Numbering> documentNumbers = new();
+    private static readonly string[] ChineseLanguage = ["zh-Hans"];
     private static int queued;
+
+    internal static bool ContainsHan(string source)
+    {
+        foreach (var rune in source.EnumerateRunes())
+            if (IsHan(rune.Value)) return true;
+        return false;
+    }
+
+    private static bool IsHan(int value) => value is
+        0x3005 or 0x3007 or >= 0x3400 and <= 0x4DBF or >= 0x4E00 and <= 0x9FFF or
+        >= 0xF900 and <= 0xFAFF or >= 0x20000 and <= 0x2FA1F or >= 0x30000 and <= 0x323AF;
+
+    private static bool IsChineseGlyph(int value) => IsHan(value) ||
+        value is >= 0x3000 and <= 0x303F or >= 0xFF01 and <= 0xFF60;
 
     internal static bool HasReferences(string source) => References().IsMatch(source);
 
@@ -131,6 +147,7 @@ internal static partial class FormulaCompatibility
         var width = Math.Ceiling(sourceWidth * scale + 6);
         var height = Math.Ceiling(sourceHeight * scale + 6);
         if (!FormulaSource.ValidSurface(width, height)) return null;
+        if (!ApplyChineseFonts(root)) return null;
         using var renderer = new SKSvg();
         var picture = renderer.FromSvg(root.ToString(SaveOptions.DisableFormatting));
         if (picture is null) return null;
@@ -140,6 +157,27 @@ internal static partial class FormulaCompatibility
             canvas.Scale((float)scale);
             canvas.DrawPicture(picture);
         });
+    }
+
+    private static bool ApplyChineseFonts(XElement root)
+    {
+        // MathJax positions each glyph missing from its math font as a separate SVG text node.
+        // Resolve those glyphs against installed fonts before handing the SVG to Svg.Skia.
+        var families = new Dictionary<int, string>();
+        foreach (var text in root.Descendants(root.Name.Namespace + "text"))
+        {
+            var value = text.Value;
+            if (value.Length == 0 || !Rune.TryGetRuneAt(value, 0, out var rune) || rune.Utf16SequenceLength != value.Length ||
+                !IsChineseGlyph(rune.Value)) continue;
+            if (!families.TryGetValue(rune.Value, out var family))
+            {
+                using var typeface = SKFontManager.Default.MatchCharacter("Microsoft YaHei", ChineseLanguage, rune.Value);
+                if (typeface is null) return false;
+                families[rune.Value] = family = typeface.FamilyName;
+            }
+            text.SetAttributeValue("font-family", family);
+        }
+        return true;
     }
 
     [GeneratedRegex(@"\\(?:lt|gt|lvert|rvert|lVert|rVert|not|middle|[bB]ig{1,2}[lrm]?|dfrac|tfrac|cfrac|genfrac|dbinom|tbinom|idotsint|unicode|mathscr|boldsymbol|overset|underset|stackrel|xrightarrow|xleftarrow|overbrace|underbrace|overrightarrow|overleftrightarrow|underleftarrow|cancel|bcancel|xcancel|boxed|operatorname|tag|label|ref|eqref|ce|pu|SI|qty|bra|ket|braket|abs|dv|pdv|coloneqq|vcentcolon|substack|smash|phantom|hphantom|vphantom|mathop|pmod|mod|bmod|mathclap|sideset)(?![a-zA-Z])|\\begin\s*\{(?:equation\*?|align\*?|alignat\*?|alignedat|gather\*?|gathered|multline\*?|smallmatrix|dcases)\}")]

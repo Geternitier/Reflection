@@ -43,6 +43,8 @@ public partial class ReaderView
                     throw new InvalidOperationException($"{extension} formula {formula}: {string.Join(", ", views.Select(view => view.FormulaError))}");
             }
 
+            await VerifyChineseMathAsync(extension);
+
             var delimiters = await RenderMathFixtureAsync(extension, @"$ x+y $ $x$2 $2π$ \( x+y \) \[ x+y \] $$ x+y $$");
             if (delimiters.Sum(view => view.RenderedFormulaCount) != 6)
                 throw new InvalidOperationException("A supported formula boundary did not render.");
@@ -90,11 +92,38 @@ public partial class ReaderView
     private static BitmapSource? FormulaBitmap(ScrollViewer scroll) =>
         (scroll.Content is ContentControl host ? host.Content as Image : scroll.Content as Image)?.Source as BitmapSource;
 
-    private static bool HasInk(BitmapSource source)
+    private static async Task VerifyChineseMathAsync(string extension)
+    {
+        // Both formulas have the same mathematical symbols. Replacing just the Han character
+        // must change the raster even if the engine would otherwise draw a missing-glyph box.
+        foreach (var (first, second) in new (string, string)[]
+        {
+            (@"$\text{中}$", @"$\text{日}$"),
+            (@"$2\text{中}$", @"$2\text{日}$"),
+            (@"$x+中$", @"$x+日$"),
+            (@"$x\xrightarrow{\text{中}}y$", @"$x\xrightarrow{\text{日}}y$"),
+            (@"$$\begin{align}x&=\text{中}\end{align}$$", @"$$\begin{align}x&=\text{日}\end{align}$$")
+        })
+        {
+            var firstImage = (await RenderMathFixtureAsync(extension, first)).SelectMany(FormulaBitmaps).SingleOrDefault();
+            var secondImage = (await RenderMathFixtureAsync(extension, second)).SelectMany(FormulaBitmaps).SingleOrDefault();
+            if (firstImage is null || secondImage is null || !HasInk(firstImage) || !HasInk(secondImage)
+                || Pixels(firstImage).AsSpan().SequenceEqual(Pixels(secondImage)))
+                throw new InvalidOperationException($"Chinese glyphs did not render in {extension}: {first}");
+        }
+    }
+
+    private static byte[] Pixels(BitmapSource source)
     {
         var stride = source.PixelWidth * 4;
         var pixels = new byte[stride * source.PixelHeight];
         source.CopyPixels(pixels, stride, 0);
+        return pixels;
+    }
+
+    private static bool HasInk(BitmapSource source)
+    {
+        var pixels = Pixels(source);
         for (var index = 3; index < pixels.Length; index += 4)
             if (pixels[index] != 0) return true;
         return false;

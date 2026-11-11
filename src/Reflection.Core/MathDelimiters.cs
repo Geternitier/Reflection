@@ -26,13 +26,16 @@ public static class MathDelimiters
         // Recognize a bounded range of oversized formulas so they take the explicit
         // source fallback path. Only formulas within MaxFormulaLength are kept whole.
         var limit = Math.Min(end, contentStart + 2 * MaxFormulaLength + closing.Length);
+        var groupDepth = 0;
         for (var position = contentStart; position < limit; position++)
         {
             var character = text[position];
             if ((!display && character is '\r' or '\n') || character == '`') return false;
-            // Numeric coefficients may adjoin Greek letters, but a currency amount cannot
-            // span whitespace and prose on its way to an unrelated dollar sign.
-            if (numericStart && character > 127 && !IsGreek(character) &&
+            // Keep Chinese prose from joining a currency amount to an unrelated dollar sign.
+            // TeX groups can contain text even when the expression starts with a number.
+            if (numericStart && character is '{' or '}' && !IsEscaped(text, position))
+                groupDepth = character == '{' ? groupDepth + 1 : Math.Max(0, groupDepth - 1);
+            if (numericStart && groupDepth == 0 && character > 127 && !IsGreek(character) &&
                 (char.IsLetter(character) || char.IsPunctuation(character))) return false;
             if (position + closing.Length > end || !text.AsSpan(position, closing.Length).SequenceEqual(closing) ||
                 IsEscaped(text, position)) continue;
