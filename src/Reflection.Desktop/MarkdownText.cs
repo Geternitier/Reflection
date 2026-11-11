@@ -162,7 +162,7 @@ public partial class MarkdownText : RichTextBox
             {
                 var painter = new MathPainter
                 {
-                    LaTeX = source, FontSize = (float)size,
+                    LaTeX = FormulaSource.ForCSharpMath(source), FontSize = (float)size,
                     LineStyle = display ? CSharpMath.Atom.LineStyle.Display : CSharpMath.Atom.LineStyle.Text,
                     TextColor = ToSkiaColor(color), DisplayErrorInline = false
                 };

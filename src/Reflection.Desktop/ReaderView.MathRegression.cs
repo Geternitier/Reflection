@@ -44,6 +44,7 @@ public partial class ReaderView
             }
 
             await VerifyChineseMathAsync(extension);
+            await VerifyCommandBoundariesAsync(extension);
 
             var delimiters = await RenderMathFixtureAsync(extension, @"$ x+y $ $x$2 $2π$ \( x+y \) \[ x+y \] $$ x+y $$");
             if (delimiters.Sum(view => view.RenderedFormulaCount) != 6)
@@ -91,6 +92,24 @@ public partial class ReaderView
 
     private static BitmapSource? FormulaBitmap(ScrollViewer scroll) =>
         (scroll.Content is ContentControl host ? host.Content as Image : scroll.Content as Image)?.Source as BitmapSource;
+
+    private static async Task VerifyCommandBoundariesAsync(string extension)
+    {
+        const string integral = @"$\int\_\Sigma f\mathrm d\sigma=\int\_\Sigma f|\vec e_u\times\vec e_v|\mathrm du\mathrm dv=\int\_\Sigma f\sqrt{1+(z'\_x)^2+(z'\_y)^2}\mathrm dx\mathrm dy$";
+        foreach (var (source, spaced) in new (string, string)[]
+        {
+            (integral, integral.Replace(@"\sigma=", @"\sigma =")),
+            (@"$\sigma=\alpha*\beta'$", @"$\sigma =\alpha *\beta '$"),
+            (@"$\int_\Sigma f\mathrm d\sigma=0$", @"$\int_\Sigma f\mathrm d\sigma =0$")
+        })
+        {
+            var compactImage = (await RenderMathFixtureAsync(extension, source)).SelectMany(FormulaBitmaps).SingleOrDefault();
+            var spacedImage = (await RenderMathFixtureAsync(extension, spaced)).SelectMany(FormulaBitmaps).SingleOrDefault();
+            if (compactImage is null || spacedImage is null || !HasInk(compactImage) ||
+                !Pixels(compactImage).AsSpan().SequenceEqual(Pixels(spacedImage)))
+                throw new InvalidOperationException($"A TeX command absorbed adjacent punctuation in {extension}: {source}");
+        }
+    }
 
     private static async Task VerifyChineseMathAsync(string extension)
     {

@@ -1,3 +1,4 @@
+using CSharpMath.Atom;
 using System.Text.RegularExpressions;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -27,6 +28,17 @@ internal static partial class FormulaSource
         return depth == 0;
     }
 
+    // CSharpMath 0.5.1 includes these suffixes in the command lookup. Separate
+    // them from recognized control words when the combined command is unknown.
+    internal static string ForCSharpMath(string source) => CommandWithSuffix().Replace(source, match =>
+    {
+        if (!match.Groups["word"].Success) return match.Value; // Escaped control symbol.
+        var word = match.ValueSpan;
+        var combined = source.AsSpan(match.Index, match.Length + 1);
+        return LaTeXSettings.Commands.TryLookup(combined).Error is not null &&
+            LaTeXSettings.Commands.TryLookup(word).Error is null ? match.Value + " " : match.Value;
+    });
+
     internal static bool ValidSurface(double width, double height) => double.IsFinite(width) && double.IsFinite(height)
         && width is >= 1 and <= 12000 && height is >= 1 and <= 1200 && width * height * 4 <= 4_000_000;
 
@@ -45,6 +57,9 @@ internal static partial class FormulaSource
         image.Freeze();
         return new(image, width, height);
     }
+
+    [GeneratedRegex(@"\\[^a-zA-Z@]|(?<word>\\[a-zA-Z@]+)(?=[=*'])")]
+    private static partial Regex CommandWithSuffix();
 
     [GeneratedRegex(@"\\(?:def|gdef|edef|xdef|let|futurelet|newcommand|renewcommand|providecommand|newenvironment|renewenvironment|DeclareMathOperator|DeclarePairedDelimiter|DeclarePairedDelimiterX|DeclarePairedDelimiterXPP|newtagform|renewtagform|usetagform|input|include|includegraphics|href|url|require|color|textcolor|definecolor|rule|hspace|vspace|kern|mkern|raisebox|resizebox|scalebox)(?![a-zA-Z])")]
     private static partial Regex RestrictedCommand();
