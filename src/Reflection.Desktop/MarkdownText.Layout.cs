@@ -263,7 +263,7 @@ public partial class MarkdownText
     private void AddDisplayMath(BlockCollection target, MarkdownObject node, string source)
     {
         var raw = MathSource(node, "$$" + source + "$$");
-        var image = Formula(source, raw, true, ++FormulaCount <= 64, fontSize: LayoutFontSize,
+        var image = Formula(source, raw, true, ++FormulaCount <= MathDelimiters.MaxFormulasPerRender, fontSize: LayoutFontSize,
             offset: node.Span.Start + (RenderPiece?.MathOffset ?? 0));
         if (image is null) { FormulaFallbackCount++; target.Add(new Paragraph(new Run(raw))); }
         else target.Add(new BlockUIContainer(FormulaScroller(image, true)));
@@ -282,7 +282,7 @@ public partial class MarkdownText
                 case LineBreakInline: target.Add(new LineBreak()); break;
                 case MathInline math:
                     var raw = MathSource(math, "$" + math.Content + "$");
-                    var formula = Formula(math.Content.ToString(), raw, math.DelimiterCount > 1, ++FormulaCount <= 64,
+                    var formula = Formula(math.Content.ToString(), raw, math.DelimiterCount > 1, ++FormulaCount <= MathDelimiters.MaxFormulasPerRender,
                         displayStyle: InTable, fontSize: LayoutFontSize, offset: math.Span.Start + (RenderPiece?.MathOffset ?? 0));
                     if (formula is null) { FormulaFallbackCount++; target.Add(new Run(raw)); }
                     else

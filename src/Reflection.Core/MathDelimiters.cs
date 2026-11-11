@@ -2,6 +2,7 @@ namespace Reflection.Core;
 
 public static class MathDelimiters
 {
+    public const int MaxFormulasPerRender = 64;
     public const int MaxFormulaLength = 4096;
     public readonly record struct Match(int ContentStart, int ContentEnd, int End, bool Display);
 

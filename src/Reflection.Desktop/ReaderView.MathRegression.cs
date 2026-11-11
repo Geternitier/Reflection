@@ -33,6 +33,7 @@ public partial class ReaderView
             @"\overrightarrow{AB}", @"\overleftrightarrow{AB}", @"\underleftarrow{AB}",
             @"\mathclap{x}", @"\sideset{_a^b}{_c^d}\sum", @"\pu{9.8 m/s^2}", @"\braket{\phi|\psi}", @"\abs{x}"
         ];
+        await VerifyDenseMathAsync();
         foreach (var extension in new[] { "md", "txt" })
         {
             foreach (var formula in samples)
@@ -92,6 +93,33 @@ public partial class ReaderView
 
     private static BitmapSource? FormulaBitmap(ScrollViewer scroll) =>
         (scroll.Content is ContentControl host ? host.Content as Image : scroll.Content as Image)?.Source as BitmapSource;
+
+    private static async Task VerifyDenseMathAsync()
+    {
+        var prefix = string.Join(" ", Enumerable.Repeat("$x$", MathDelimiters.MaxFormulasPerRender - 2));
+        var standardization = """
+            1. $X^* = (X-E(X))/\sqrt{D(X)}$，称 $(X^*,Y^*)$ 为标准化随机变量。
+            2. $(X,Y)$ 的相关系数为 $(X^*,Y^*)$ 的协方差。
+            """;
+        var denseParagraph = string.Join(" ", Enumerable.Repeat("$x$", MathDelimiters.MaxFormulasPerRender * 2 + 1));
+        var denseList = string.Join("\n", Enumerable.Range(1, 18).Select(i => $"{i}. $a$ $b$ $c$ $d$"));
+        const string header = "| $x$ |\n|---|\n";
+        var denseTable = header + string.Concat(Enumerable.Repeat("| $a$ $b$ $c$ |\n", 22));
+        foreach (var (extension, source, expected) in new (string, string, int)[]
+        {
+            ("md", prefix + "\n\n" + standardization, MathDelimiters.MaxFormulasPerRender + 2),
+            ("md", denseParagraph, MathDelimiters.MaxFormulasPerRender * 2 + 1),
+            ("txt", denseParagraph, MathDelimiters.MaxFormulasPerRender * 2 + 1),
+            ("md", denseList, 72),
+            ("md", denseTable, 68) // 66 body formulas and a header on both slices.
+        })
+        {
+            var views = await RenderMathFixtureAsync(extension, source);
+            if (views.Any(view => view.FormulaCount > MathDelimiters.MaxFormulasPerRender || view.FormulaFallbackCount != 0) ||
+                views.Sum(view => view.RenderedFormulaCount) != expected)
+                throw new InvalidOperationException($"Dense {extension} formulas were dropped at a reader piece boundary.");
+        }
+    }
 
     private static async Task VerifyCommandBoundariesAsync(string extension)
     {

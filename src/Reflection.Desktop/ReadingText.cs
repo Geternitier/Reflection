@@ -97,7 +97,7 @@ public sealed class ReadingText : MarkdownText
             offset += token.Raw.Length;
             if (token.Kind is not (MarkupKind.InlineMath or MarkupKind.DisplayMath)) { Current().Inlines.Add(new Run(token.Raw)); continue; }
             var block = token.Kind == MarkupKind.DisplayMath;
-            var image = Formula(token.Text, token.Raw, block, ++FormulaCount <= 64, fontSize: TextSize, offset: start);
+            var image = Formula(token.Text, token.Raw, block, ++FormulaCount <= MathDelimiters.MaxFormulasPerRender, fontSize: TextSize, offset: start);
             if (image is null) { FormulaFallbackCount++; Current().Inlines.Add(new Run(token.Raw)); continue; }
             var scroll = FormulaScroller(image, block);
             if (block) { paragraph = null; doc.Blocks.Add(new BlockUIContainer(scroll)); }
