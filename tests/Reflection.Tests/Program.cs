@@ -609,6 +609,42 @@ await Test("Native diagram subset rejects includes, unsupported directives and o
     Check(MarkdownDiagrams.Parse("flowchart TD\nA --> B\n" + new string('x', 6000), "mermaid") is null);
     return Task.CompletedTask;
 });
+await Test("Reader shares explicit math boundaries and keeps cross-piece formulas intact", () =>
+{
+    const string explicitMath = @"$2π$ $2α$ $x$2 \( x+y \) \[ x+y \] $$ x+y $$";
+    Check(ReaderDocuments.ParseMarkdown(explicitMath).Descendants<MathInline>().Count() == 6);
+    Check(MessageMarkupTokenizer.Tokenize(explicitMath).Count(token =>
+        token.Kind is MarkupKind.InlineMath or MarkupKind.DisplayMath) == 6);
+    const string currency = "价格 $5 和 $10；$10.20 与 $20.50。";
+    Check(!ReaderDocuments.ParseMarkdown(currency).Descendants<MathInline>().Any());
+    Check(!MessageMarkupTokenizer.Tokenize(currency).Any(token =>
+        token.Kind is MarkupKind.InlineMath or MarkupKind.DisplayMath));
+
+    var source = new string('a', ReaderDocuments.PieceCharacters - 2) + " $x+1$ " +
+        new string('b', ReaderDocuments.PieceCharacters + 10);
+    var md = ReaderDocuments.Parse("boundary.md", source);
+    var txt = ReaderDocuments.Parse("boundary.txt", source);
+    Check(md.Pieces.SelectMany(piece => piece.Blocks).OfType<ParagraphBlock>().SelectMany(block => block.Inline?.Descendants<MathInline>() ?? [])
+        .Single().Content.ToString() == "x+1");
+    Check(txt.Pieces.SelectMany(piece => MessageMarkupTokenizer.Tokenize(piece.Text!, recognizeTables: false))
+        .Single(token => token.Kind == MarkupKind.InlineMath).Text == "x+1");
+    Check(string.Concat(txt.Pieces.Select(piece => piece.Text)).TrimEnd('\n') == source);
+
+    var document = ReaderDocuments.Parse("numbers.md", @"前向 \eqref{eq:a}
+
+\begin{align}
+a&=b\label{eq:a}\\
+c&=d
+\end{align}
+
+```tex
+\begin{equation}x=1\label{ignored}\end{equation}
+```");
+    var formula = document.Pieces.First().Formulas!.Entries.Single();
+    Check(formula.Source.Contains(@"\label{eq:a}") && formula.Display &&
+        document.Text.AsSpan(formula.Offset).StartsWith(@"\begin{align}"));
+    return Task.CompletedTask;
+});
 await Test("Reader math accepts Chinese adjacency and nested list formulas", () =>
 {
     var doc = ReaderDocuments.Parse("limits.md", "1. 唯一性：$f$在点$p$的极限存在。\n2. 对任意正数$\\varepsilon$，总有点$p$的邻域$\\mathring N_\\varepsilon(q)$。\n   - 设$\\lim f(x)=A,\\lim g(x)=B$，其中$k,l$为常数。\n   - $\\frac{f(x)}{g(x)}$为商。\n\n金额 $5 和 $10；转义 \\$x\\$；`$code$`。\n");
@@ -684,4 +720,3 @@ sealed class FragmentStream(byte[] bytes) : MemoryStream(bytes)
 {
     public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default) => base.ReadAsync(buffer[..Math.Min(buffer.Length, 3)], ct);
 }
-

@@ -19,6 +19,7 @@ public partial class MainWindow
         await ReaderPage.VerifyAsync(output);
         await ReaderPage.VerifyLocalImagesAsync(output);
         await ReaderPage.VerifyFootnotesAndWikiLinksAsync();
+        await ReaderPage.VerifyMathCompatibilityAsync();
         var extras = Enumerable.Range(0, 1000).Select(i => new CharacterCard { Name = "虚拟角色 " + i }).ToArray();
         try
         {

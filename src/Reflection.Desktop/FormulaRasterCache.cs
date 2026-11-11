@@ -5,7 +5,7 @@ namespace Reflection.Desktop;
 // Shared frozen rasters survive container recycling. A strict LRU bounds retained pixels.
 internal static class FormulaRasterCache
 {
-    internal readonly record struct Key(string Source, bool Block, bool Display, double Size, int Theme);
+    internal readonly record struct Key(string Source, bool Block, bool Display, double Size, int Theme, long NumberingScope = 0, int Offset = 0);
     internal sealed record Raster(BitmapSource Image, double Width, double Height)
     { public long Pixels => (long)Image.PixelWidth * Image.PixelHeight; }
     private static readonly Dictionary<Key, LinkedListNode<(Key Key, Raster Raster)>> entries = [];
