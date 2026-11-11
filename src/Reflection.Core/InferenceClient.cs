@@ -64,14 +64,33 @@ public sealed class InferenceClient : IDisposable
         try
         {
             var ollama = model.Service.Protocol == ApiProtocol.Ollama;
+            var props = new UriBuilder(Endpoint(model.Service, "props")) { Path = "/props" };
             using var response = ollama
                 ? await http.PostAsJsonAsync(Endpoint(model.Service, "api/show"), new { model = model.Model }, timeout.Token)
-                : await http.GetAsync(new Uri(Endpoint(model.Service, "props").GetLeftPart(UriPartial.Authority) + "/props"), HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+                : await http.GetAsync(props.Uri, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
             if (!response.IsSuccessStatusCode) return info;
             await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token);
             using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: timeout.Token);
-            if (ollama) Prompting.ReadShow(doc.RootElement, info); else Prompting.ReadProps(doc.RootElement, info);
-            info.Inspected = true;
+            if (ollama)
+            {
+                Prompting.ReadShow(doc.RootElement, info);
+            }
+            else if (doc.RootElement.TryGetProperty("role", out var role) && role.ValueKind == JsonValueKind.String &&
+                role.GetString() == "router")
+            {
+                // Router properties are global. Query the selected runner without loading a cold model.
+                info.ReasoningEffortLevels = [];
+                props.Query = $"model={Uri.EscapeDataString(model.Model)}&autoload=false";
+                using var runner = await http.GetAsync(props.Uri, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+                if (!runner.IsSuccessStatusCode) return info;
+                await using var runnerStream = await runner.Content.ReadAsStreamAsync(timeout.Token);
+                using var runnerDoc = await JsonDocument.ParseAsync(runnerStream, cancellationToken: timeout.Token);
+                Prompting.ReadProps(runnerDoc.RootElement, info);
+            }
+            else
+            {
+                Prompting.ReadProps(doc.RootElement, info);
+            }
             return info;
         }
         catch (Exception ex) when (ex is HttpRequestException or JsonException or ArgumentException or InvalidOperationException or OperationCanceledException or KeyNotFoundException)
@@ -143,7 +162,8 @@ public sealed class InferenceClient : IDisposable
         else
         {
             foreach (var pair in options) payload[pair.Key] = pair.Value;
-            if (reason != "off") payload["reasoning_effort"] = reason;
+            if (Prompting.OpenAiReasoningEffort(reason, info ?? model.Info) is { } effort)
+                payload["reasoning_effort"] = effort;
         }
         return JsonSerializer.Serialize(payload);
     }

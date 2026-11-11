@@ -37,6 +37,59 @@ await Test("OpenAI discovery and /v1 normalization", async () =>
     using var client = new InferenceClient(new Stub(r => { Check(r.RequestUri!.AbsolutePath == "/v1/models"); return Task.FromResult(Json("{\"data\":[{\"id\":\"local-model\"}]}")); }));
     var result = await client.DiscoverAsync(OpenAI(), default); Check(result.Online && result.Models[0].Model == "local-model");
 });
+await Test("llama.cpp router uses the selected model's advertised reasoning levels", async () =>
+{
+    const string modelId = "provider/model:Q4";
+    var model = new ModelOption(OpenAI(), modelId);
+    var runnerAvailable = false;
+    using var client = new InferenceClient(new Stub(async request =>
+    {
+        var uri = request.RequestUri!;
+        if (request.Method == HttpMethod.Get)
+        {
+            Check(uri.AbsolutePath == "/props");
+            if (uri.Query.Length == 0) return Json("""{"role":"router","default_generation_settings":{"n_ctx":0}}""");
+            Check(uri.Query == "?model=provider%2Fmodel%3AQ4&autoload=false");
+            return runnerAvailable
+                ? Json("""{"default_generation_settings":{"n_ctx":4096},"chat_template_caps":{"supports_reasoning_effort":true,"reasoning_effort_levels":["low","medium","xhigh"]}}""")
+                : new HttpResponseMessage(HttpStatusCode.BadRequest);
+        }
+        Check(uri.AbsolutePath == "/v1/chat/completions");
+        using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
+        Check(body.RootElement.GetProperty("model").GetString() == modelId);
+        if (runnerAvailable) Check(body.RootElement.GetProperty("reasoning_effort").GetString() == "xhigh");
+        else Check(!body.RootElement.TryGetProperty("reasoning_effort", out _));
+        return Stream("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n");
+    }));
+    var settings = new AppSettings { Reason = "high" };
+    var messages = new ChatMessage[] { new() { Content = "hello" } };
+
+    model.Info.CopyFrom(await client.InspectAsync(model, default));
+    Check(!model.Info.Inspected && model.Info.ReasoningEffortLevels is { Length: 0 });
+    await foreach (var _ in client.StreamAsync(model, messages, "", settings, default, model.Info)) { }
+
+    runnerAvailable = true;
+    model.Info.CopyFrom(await client.InspectAsync(model, default));
+    Check(model.Info.Inspected && model.Info.ContextLimit == "4096");
+    await foreach (var _ in client.StreamAsync(model, messages, "", settings, default, model.Info)) { }
+
+    settings.Reason = "medium";
+    using var medium = JsonDocument.Parse(InferenceClient.CreateBody(model, messages, "", settings));
+    Check(medium.RootElement.GetProperty("reasoning_effort").GetString() == "medium");
+    settings.Reason = "off";
+    using var off = JsonDocument.Parse(InferenceClient.CreateBody(model, messages, "", settings));
+    Check(!off.RootElement.TryGetProperty("reasoning_effort", out _));
+});
+await Test("OpenAI models without advertised reasoning support omit the parameter", () =>
+{
+    using var props = JsonDocument.Parse("""{"chat_template_caps":{"supports_reasoning_effort":false}}""");
+    var model = new ModelOption(OpenAI(), "test");
+    Prompting.ReadProps(props.RootElement, model.Info);
+    using var body = JsonDocument.Parse(InferenceClient.CreateBody(model, [new() { Content = "hello" }], "",
+        new() { Reason = "high" }));
+    Check(!body.RootElement.TryGetProperty("reasoning_effort", out _));
+    return Task.CompletedTask;
+});
 await Test("Unavailable service", async () => { using var c = new InferenceClient(new Stub(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)))); Check(!(await c.DiscoverAsync(new(), default)).Online); });
 await Test("Invalid model payload", async () => { using var c = new InferenceClient(new Stub(_ => Task.FromResult(Json("{}")))); Check(!(await c.DiscoverAsync(new(), default)).Online); });
 await Test("Loopback-only addresses", async () =>
