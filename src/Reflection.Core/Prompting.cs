@@ -12,13 +12,14 @@ public static class Prompting
     public const string ContinueCue = "请从刚才停下的地方继续写，不要重复已经写过的内容，也不要另起说明。";
     public const string HelpSystem = "你帮助用户起草下一条要发送的消息。只输出可直接发送的正文，不要加引号、标题或解释。使用用户正在使用的语言，语气自然。";
     public const string ImagePrompt = "请结合图片回答。";
+    public const int MaxContextWindow = 1_048_576;
     public static readonly ParamField[] Fields =
     [
         new("temperature", "温度", "越高越发散", 0, 2, false, false, "0.8"),
         new("top_p", "Top P", "核采样", 0, 1, false, false, "0.95"),
         new("top_k", "Top K", "候选词数量。兼容接口超过 64 时按 64", 0, 200, true, false, "40"),
         new("min_p", "Min P", "最低概率", 0, 1, false, false, "0.05"),
-        new("num_ctx", "上下文长度", "发给模型的上下文。填太大可能占满显存", 1, 1048576, true, false, ""),
+        new("num_ctx", "上下文长度", "发给模型的上下文。填太大可能占满显存", 1, MaxContextWindow, true, false, ""),
         new("num_predict", "最长回复", "-1 表示不限制", -1, 131072, true, false, "-1"),
         new("repeat_penalty", "重复惩罚", "1 表示关闭", 0, 2, false, false, "1"),
         new("repeat_last_n", "惩罚窗口", "重复惩罚回看多少个 token", 0, 8192, true, false, "64"),
@@ -29,6 +30,21 @@ public static class Prompting
     ];
 
     public static string NormalizeReason(string? value) => value is "low" or "medium" or "high" ? value : "off";
+
+    internal static string? OpenAiReasoningEffort(string reason, ModelInfo info)
+    {
+        if (reason == "off") return null;
+        var levels = info.ReasoningEffortLevels;
+        if (levels is null) return reason;
+        if (levels.Length == 0) return null;
+        if (levels.Contains(reason, StringComparer.Ordinal)) return reason;
+        return reason switch
+        {
+            "low" => levels[0],
+            "high" => levels[^1],
+            _ => levels[(levels.Length - 1) / 2]
+        };
+    }
 
     public static string ShownDefault(ParamField field, ModelInfo? info)
     {
@@ -99,7 +115,7 @@ public static class Prompting
         {
             if (!effective.TryGetValue(field.Key, out var value)) continue;
             var shown = ShownDefault(field, info);
-            if (shown.Length > 0 && Same(field, value, shown)) continue;
+            if (field.Key != "num_ctx" && shown.Length > 0 && Same(field, value, shown)) continue;
             if (field.Lines)
             {
                 var stops = value.Split('\n').Select(x => x.Trim()).Where(x => x.Length > 0).Take(openAi ? 4 : 16).ToArray();
@@ -217,6 +233,17 @@ public static class Prompting
             }
             if (settings.TryGetProperty("n_ctx", out var ctx) && ctx.TryGetDouble(out var length) && length > 0)
                 info.ContextLimit = ((int)length).ToString(CultureInfo.InvariantCulture);
+        }
+        if (root.TryGetProperty("chat_template_caps", out var caps) && caps.ValueKind == JsonValueKind.Object)
+        {
+            if (caps.TryGetProperty("supports_reasoning_effort", out var supported) && supported.ValueKind == JsonValueKind.False)
+                info.ReasoningEffortLevels = [];
+            else if (caps.TryGetProperty("reasoning_effort_levels", out var levels) && levels.ValueKind == JsonValueKind.Array)
+                info.ReasoningEffortLevels = levels.EnumerateArray()
+                    .Where(level => level.ValueKind == JsonValueKind.String)
+                    .Select(level => level.GetString()!.Trim())
+                    .Where(level => level.Length > 0)
+                    .Distinct(StringComparer.Ordinal).ToArray();
         }
         info.Inspected = true;
     }

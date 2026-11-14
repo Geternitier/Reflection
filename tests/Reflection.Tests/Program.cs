@@ -1,3 +1,9 @@
+using Markdig.Extensions.Alerts;
+using Markdig.Extensions.DefinitionLists;
+using Markdig.Extensions.Footnotes;
+using Markdig.Extensions.Mathematics;
+using Markdig.Syntax;
+using Markdig.Syntax.Inlines;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -15,6 +21,12 @@ async Task<string> Collect(InferenceClient client, ServiceConfig config, Cancell
     await foreach (var delta in client.StreamAsync(new(config, "test"), [new() { Content = "你好" }], "system", new(), token)) result.Append(delta.Text);
     return result.ToString();
 }
+async Task<List<StreamDelta>> CollectMeasured(InferenceClient client, ModelOption model)
+{
+    var deltas = new List<StreamDelta>();
+    await foreach (var delta in client.StreamAsync(model, [new() { Content = "你好" }], "", new(), default, collectMetrics: true)) deltas.Add(delta);
+    return deltas;
+}
 await Test("Ollama discovery", async () =>
 {
     using var client = new InferenceClient(new Stub(async r => { Check(r.RequestUri!.AbsolutePath == "/api/tags"); await Task.Yield(); return Json("{\"models\":[{\"name\":\"qwen\"},{\"name\":\"qwen\"}]}"); }));
@@ -24,6 +36,59 @@ await Test("OpenAI discovery and /v1 normalization", async () =>
 {
     using var client = new InferenceClient(new Stub(r => { Check(r.RequestUri!.AbsolutePath == "/v1/models"); return Task.FromResult(Json("{\"data\":[{\"id\":\"local-model\"}]}")); }));
     var result = await client.DiscoverAsync(OpenAI(), default); Check(result.Online && result.Models[0].Model == "local-model");
+});
+await Test("llama.cpp router uses the selected model's advertised reasoning levels", async () =>
+{
+    const string modelId = "provider/model:Q4";
+    var model = new ModelOption(OpenAI(), modelId);
+    var runnerAvailable = false;
+    using var client = new InferenceClient(new Stub(async request =>
+    {
+        var uri = request.RequestUri!;
+        if (request.Method == HttpMethod.Get)
+        {
+            Check(uri.AbsolutePath == "/props");
+            if (uri.Query.Length == 0) return Json("""{"role":"router","default_generation_settings":{"n_ctx":0}}""");
+            Check(uri.Query == "?model=provider%2Fmodel%3AQ4&autoload=false");
+            return runnerAvailable
+                ? Json("""{"default_generation_settings":{"n_ctx":4096},"chat_template_caps":{"supports_reasoning_effort":true,"reasoning_effort_levels":["low","medium","xhigh"]}}""")
+                : new HttpResponseMessage(HttpStatusCode.BadRequest);
+        }
+        Check(uri.AbsolutePath == "/v1/chat/completions");
+        using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
+        Check(body.RootElement.GetProperty("model").GetString() == modelId);
+        if (runnerAvailable) Check(body.RootElement.GetProperty("reasoning_effort").GetString() == "xhigh");
+        else Check(!body.RootElement.TryGetProperty("reasoning_effort", out _));
+        return Stream("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n");
+    }));
+    var settings = new AppSettings { Reason = "high" };
+    var messages = new ChatMessage[] { new() { Content = "hello" } };
+
+    model.Info.CopyFrom(await client.InspectAsync(model, default));
+    Check(!model.Info.Inspected && model.Info.ReasoningEffortLevels is { Length: 0 });
+    await foreach (var _ in client.StreamAsync(model, messages, "", settings, default, model.Info)) { }
+
+    runnerAvailable = true;
+    model.Info.CopyFrom(await client.InspectAsync(model, default));
+    Check(model.Info.Inspected && model.Info.ContextLimit == "4096");
+    await foreach (var _ in client.StreamAsync(model, messages, "", settings, default, model.Info)) { }
+
+    settings.Reason = "medium";
+    using var medium = JsonDocument.Parse(InferenceClient.CreateBody(model, messages, "", settings));
+    Check(medium.RootElement.GetProperty("reasoning_effort").GetString() == "medium");
+    settings.Reason = "off";
+    using var off = JsonDocument.Parse(InferenceClient.CreateBody(model, messages, "", settings));
+    Check(!off.RootElement.TryGetProperty("reasoning_effort", out _));
+});
+await Test("OpenAI models without advertised reasoning support omit the parameter", () =>
+{
+    using var props = JsonDocument.Parse("""{"chat_template_caps":{"supports_reasoning_effort":false}}""");
+    var model = new ModelOption(OpenAI(), "test");
+    Prompting.ReadProps(props.RootElement, model.Info);
+    using var body = JsonDocument.Parse(InferenceClient.CreateBody(model, [new() { Content = "hello" }], "",
+        new() { Reason = "high" }));
+    Check(!body.RootElement.TryGetProperty("reasoning_effort", out _));
+    return Task.CompletedTask;
 });
 await Test("Unavailable service", async () => { using var c = new InferenceClient(new Stub(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)))); Check(!(await c.DiscoverAsync(new(), default)).Online); });
 await Test("Invalid model payload", async () => { using var c = new InferenceClient(new Stub(_ => Task.FromResult(Json("{}")))); Check(!(await c.DiscoverAsync(new(), default)).Online); });
@@ -43,6 +108,47 @@ await Test("Ollama NDJSON and request options", async () =>
 {
     using var c = new InferenceClient(new Stub(async r => { Check(r.RequestUri!.AbsolutePath == "/api/chat"); using var body = JsonDocument.Parse(await r.Content!.ReadAsStringAsync()); Check(body.RootElement.GetProperty("options").GetProperty("num_predict").GetInt32() == 2048); return Stream("{\"message\":{\"content\":\"你好\"},\"done\":false}\n{\"message\":{\"content\":\"！\"},\"done\":true}\n"); }));
     Check(await Collect(c, new()) == "你好！");
+});
+await Test("Ollama metrics use decode time and the running model's context capacity", async () =>
+{
+    using var client = new InferenceClient(new Stub(r => Task.FromResult(r.RequestUri!.AbsolutePath switch
+    {
+        "/api/chat" => Stream("{\"message\":{\"content\":\"ok\"},\"done\":true,\"prompt_eval_count\":1000,\"eval_count\":24,\"eval_duration\":500000000}\n"),
+        "/api/ps" => Json("{\"models\":[{\"name\":\"other\",\"context_length\":2048},{\"name\":\"test:latest\",\"context_length\":4096}]}"),
+        _ => throw new Exception("Unexpected metrics endpoint")
+    })));
+    var model = new ModelOption(new(), "test");
+    model.Info.ContextLimit = "131072"; // Architecture maximum is unrelated to the loaded runner.
+    var deltas = await CollectMeasured(client, model);
+    Check(string.Concat(deltas.Select(delta => delta.Text)) == "ok");
+    Check(deltas.Last().Metrics == new GenerationMetrics(1024, 4096, 48, false));
+});
+await Test("OpenAI usage after finish_reason supplies the count and an estimated rate", async () =>
+{
+    using var client = new InferenceClient(new Stub(async r =>
+    {
+        using var json = JsonDocument.Parse(await r.Content!.ReadAsStringAsync());
+        Check(json.RootElement.GetProperty("stream_options").GetProperty("include_usage").GetBoolean());
+        return Stream("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n"
+            + "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":24,\"total_tokens\":1024}}\n\n"
+            + "data: [DONE]\n\n");
+    }));
+    var deltas = await CollectMeasured(client, new(OpenAI(), "test"));
+    Check(string.Concat(deltas.Select(delta => delta.Text)) == "ok");
+    Check(deltas.Last().Metrics is { ContextTokens: 1024, ContextLimit: null, TokensPerSecond: > 0, EstimatedSpeed: true });
+});
+await Test("A compatible server rejecting usage options still returns the original completion", async () =>
+{
+    var calls = 0;
+    using var client = new InferenceClient(new Stub(async r =>
+    {
+        using var json = JsonDocument.Parse(await r.Content!.ReadAsStringAsync());
+        Check(json.RootElement.TryGetProperty("stream_options", out _) == (++calls == 1));
+        return calls == 1 ? new(HttpStatusCode.UnprocessableEntity) { Content = new StringContent("unknown field stream_options") }
+            : Stream("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n");
+    }));
+    var deltas = await CollectMeasured(client, new(OpenAI(), "test"));
+    Check(calls == 2 && deltas is [{ Text: "ok", Metrics: null }]);
 });
 await Test("SSE multiline data", async () =>
 {
@@ -97,6 +203,41 @@ await Test("Character V2 round trip", () =>
 });
 await Test("Character V1 import", () => { var c = CharacterExchange.Import("{\"name\":\"A\",\"description\":\"D\",\"personality\":\"P\",\"first_mes\":\"Hi\"}"); Check(c.Description == "D" && c.SystemPrompt.Contains("P") && c.Greeting == "Hi"); return Task.CompletedTask; });
 await Test("Invalid card rejected", () => Throws<ArgumentException>(() => { CharacterExchange.Import("{}"); return Task.CompletedTask; }));
+await Test("Avatar, cover and conversation context persist independently", async () =>
+{
+    var root = Path.Combine(Environment.CurrentDirectory, "artifacts", "avatar-context-" + Guid.NewGuid());
+    try
+    {
+        var store = new LocalStore(root);
+        var card = new CharacterCard { Name = "avatar fixture", Image = new() { Data = "YWJj" }, Avatar = new() { Data = "ZGVm" } };
+        await store.SaveCharactersAsync([card]);
+        var chat = new Conversation { CharacterId = card.Id, CharacterSnapshot = card, ContextWindowOverride = 8192 };
+        await store.SaveConversationAsync(chat);
+        var saved = (await store.LoadCharactersAsync()).Single();
+        var savedChat = await store.LoadConversationAsync(chat.Id);
+        Check(saved.Avatar is { AssetId: not null, Store: not null } && saved.Avatar.AssetId != saved.Image?.AssetId);
+        Check(savedChat.CharacterSnapshot?.Avatar?.AssetId == saved.Avatar!.AssetId && savedChat.ContextWindowOverride == 8192);
+        var exchanged = CharacterExchange.Import(await CharacterExchange.ExportAsync(saved));
+        Check(exchanged.Image?.Data == "YWJj" && exchanged.Avatar?.Data == "ZGVm");
+        await store.SaveCharactersAsync([]);
+        await store.SaveCharactersAsync([]);
+        await store.CollectImageAssetsAsync();
+        Check((await store.LoadConversationAsync(chat.Id)).CharacterSnapshot?.Avatar?.AssetId == saved.Avatar.AssetId);
+        Check(JsonSerializer.Deserialize<Conversation>("{\"title\":\"old chat\"}", LocalStore.Json)?.ContextWindowOverride is null);
+    }
+    finally { Directory.Delete(root, true); }
+});
+await Test("An explicit context window reaches both protocols even when equal to model metadata", () =>
+{
+    var info = new ModelInfo { ContextLimit = "8192" };
+    var settings = new AppSettings { ParamDefaults = new() { ["num_ctx"] = "8192" } };
+    using var ollama = JsonDocument.Parse(InferenceClient.CreateBody(new(new(), "m"), [new() { Content = "hi" }], "", settings, info));
+    using var compatible = JsonDocument.Parse(InferenceClient.CreateBody(new(OpenAI(), "m"), [new() { Content = "hi" }], "", settings, info));
+    Check(ollama.RootElement.GetProperty("options").GetProperty("num_ctx").GetInt32() == 8192);
+    Check(compatible.RootElement.GetProperty("n_ctx").GetInt32() == 8192);
+    Check(!Prompting.RequestOptions(new(), info, false).ContainsKey("num_ctx") && !Prompting.RequestOptions(new(), info, true).ContainsKey("n_ctx"));
+    return Task.CompletedTask;
+});
 await Test("Persistence, index, backup recovery, delete", async () =>
 {
     var root = Path.Combine(Environment.CurrentDirectory, "artifacts", "Reflection-tests-" + Guid.NewGuid()); var store = new LocalStore(root);
@@ -468,6 +609,103 @@ await Test("Reader state/snapshot persistence, backup recovery and snapshot clea
     }
     finally { Directory.Delete(dir, true); }
 });
+await Test("Reader image paths resolve local references and reject remote sources", () =>
+{
+    var directory = Path.GetFullPath("reader-path-fixture");
+    var document = Path.Combine(directory, "chapter.md");
+    var image = Path.Combine(directory, "figures", "图 1.png");
+    Check(ReaderDocuments.ResolveImagePath(document, "figures/%E5%9B%BE%201.png") == image);
+    Check(ReaderDocuments.ResolveImagePath(document, new Uri(image).AbsoluteUri) == image);
+    foreach (var reference in new[] { "https://example.invalid/x.png", "//server/share/x.png",
+        "file://server/share/x.png", "%5c%5cserver/share/x.png", "data:image/png;base64,AAAA", "figure.png:alternate.png", "figure.svg" })
+        Check(ReaderDocuments.ResolveImagePath(document, reference) is null, "Unsafe image reference: " + reference);
+    Check(ReaderDocuments.Parse(document, "![图](figures/x.png)").Pieces.Single().SourcePath == document);
+    return Task.CompletedTask;
+});
+await Test("Shared Markdown extensions preserve source and virtualized footnote positions", () =>
+{
+    const string source = "# Topic\n\nH~2~O and x^2^.[^ref] [[Sibling#Section|Open section]]\n\nTerm\n: definition\n\n> [!TIP]\n> Keep reading\n\n[^ref]: Footnote body\n\n## Last";
+    var ast = ReaderDocuments.ParseMarkdown(source);
+    Check(ast.Descendants<EmphasisInline>().Select(i => i.DelimiterChar).SequenceEqual(['~', '^']));
+    Check(ast.Descendants<LinkInline>().Any(link => link.Url == "Sibling.md#Section" && ReaderDocuments.InlineText(link) == "Open section"));
+    Check(ast.OfType<DefinitionList>().Count() == 1 && ast.OfType<AlertBlock>().Single().Kind.ToString().Equals("tip", StringComparison.OrdinalIgnoreCase));
+    var reading = ReaderDocuments.Parse("sample.md", source);
+    var note = reading.Pieces.SelectMany(piece => piece.Blocks).OfType<Footnote>().Single();
+    Check(note.Order == 1 && note.Links.Any(link => !link.IsBackLink && link.Span.Start == source.IndexOf("[^ref]", StringComparison.Ordinal)));
+    Check(reading.Pieces.Any(piece => piece.Blocks.Contains(note) && piece.Offset == note.Span.Start) && note.Span.Start > source.IndexOf("[^ref]:", StringComparison.Ordinal));
+    Check(reading.Pieces.Select(piece => piece.Offset).SequenceEqual(reading.Pieces.Select(piece => piece.Offset).Order()));
+    Check(reading.Text == source && reading.Outline.Count == 2);
+    var rows = ReaderDocuments.Parse("code.md", "```cs\n" + string.Join('\n', Enumerable.Repeat("int n = 1;", 185)) + "\n```").Pieces;
+    Check(rows.Select(piece => piece.CodeLine).SequenceEqual([1, 81, 161]) && rows.All(piece => piece.CodeLanguage == "cs"));
+    return Task.CompletedTask;
+});
+await Test("Shared Markdown keeps formula and code pipes inside cells and leaves partial TeX visible", () =>
+{
+    const string source = "| A | B |\n|---|---|\n| $a|b$ | `x|y` |\n\n金额 $5 和 $10。\n\n未闭合 \\(x";
+    var ast = ReaderDocuments.ParseMarkdown(source);
+    var table = ast.OfType<Markdig.Extensions.Tables.Table>().Single();
+    Check(table.ColumnDefinitions.Count == 2 && table.Descendants<MathInline>().Single().Content.ToString() == "a|b");
+    Check(table.Descendants<CodeInline>().Single().Content == "x|y" && ast.Descendants<MathInline>().Count() == 1);
+    Check(ReaderDocuments.InlineText(ast.OfType<ParagraphBlock>().Last().Inline).EndsWith("\\(x", StringComparison.Ordinal));
+    return Task.CompletedTask;
+});
+await Test("Native diagram subset rejects includes, unsupported directives and oversized input", () =>
+{
+    Check(MarkdownDiagrams.Parse("flowchart TD\nA[开始] --> B{判断} -->|通过| C(结束)", "mermaid")
+        is FlowDiagram { Nodes.Count: 3, Edges.Count: 2 } flow && flow.Nodes[1].Shape == "diamond" && flow.Edges[1].Label == "通过");
+    Check(MarkdownDiagrams.Parse("sequenceDiagram\nparticipant A as 用户\nA->>B: 读取\nB-->>A: 返回", "mermaid")
+        is SequenceDiagram { Participants.Count: 2, Messages.Count: 2 });
+    Check(MarkdownDiagrams.Parse("@startuml\nparticipant \"Service\" as S\nA -> S: ping\nS --> A: pong\n@enduml", "plantuml")
+        is SequenceDiagram sequence && sequence.Participants[0].Label == "Service" && sequence.Messages[1].From == "S");
+    Check(MarkdownDiagrams.Parse("@startuml\n!include https://example.invalid/test\nA -> B\n@enduml", "plantuml") is null);
+    Check(MarkdownDiagrams.Parse("flowchart TD\nA --> B\nclick A \"https://example.invalid\"", "mermaid") is null);
+    Check(MarkdownDiagrams.Parse("flowchart TD\nA --> B\n" + new string('x', 6000), "mermaid") is null);
+    return Task.CompletedTask;
+});
+await Test("Reader shares explicit math boundaries and keeps cross-piece formulas intact", () =>
+{
+    const string explicitMath = @"$2π$ $2α$ $x$2 \( x+y \) \[ x+y \] $$ x+y $$";
+    Check(ReaderDocuments.ParseMarkdown(explicitMath).Descendants<MathInline>().Count() == 6);
+    Check(MessageMarkupTokenizer.Tokenize(explicitMath).Count(token =>
+        token.Kind is MarkupKind.InlineMath or MarkupKind.DisplayMath) == 6);
+    var dense = string.Join(" ", Enumerable.Repeat("$x$", MathDelimiters.MaxFormulasPerRender + 1));
+    var denseText = ReaderDocuments.Parse("dense.txt", dense);
+    Check(denseText.Pieces.Count == 2 && string.Concat(denseText.Pieces.Select(piece => piece.Text)).TrimEnd('\n') == dense);
+    var denseMarkdown = ReaderDocuments.Parse("dense.md", dense);
+    Check(denseMarkdown.Pieces.Count == 2 && denseMarkdown.Pieces[1].MathOffset == denseMarkdown.Pieces[1].Offset);
+    const string chineseUnit = @"$2\text{米}$，另有价格 $5 和 $10。";
+    Check(ReaderDocuments.ParseMarkdown(chineseUnit).Descendants<MathInline>().Single().Content.ToString() == @"2\text{米}");
+    Check(MessageMarkupTokenizer.Tokenize(chineseUnit).Single(token => token.Kind == MarkupKind.InlineMath).Text == @"2\text{米}");
+    const string currency = "价格 $5 和 $10；$10.20 与 $20.50。";
+    Check(!ReaderDocuments.ParseMarkdown(currency).Descendants<MathInline>().Any());
+    Check(!MessageMarkupTokenizer.Tokenize(currency).Any(token =>
+        token.Kind is MarkupKind.InlineMath or MarkupKind.DisplayMath));
+
+    var source = new string('a', ReaderDocuments.PieceCharacters - 2) + " $x+1$ " +
+        new string('b', ReaderDocuments.PieceCharacters + 10);
+    var md = ReaderDocuments.Parse("boundary.md", source);
+    var txt = ReaderDocuments.Parse("boundary.txt", source);
+    Check(md.Pieces.SelectMany(piece => piece.Blocks).OfType<ParagraphBlock>().SelectMany(block => block.Inline?.Descendants<MathInline>() ?? [])
+        .Single().Content.ToString() == "x+1");
+    Check(txt.Pieces.SelectMany(piece => MessageMarkupTokenizer.Tokenize(piece.Text!, recognizeTables: false))
+        .Single(token => token.Kind == MarkupKind.InlineMath).Text == "x+1");
+    Check(string.Concat(txt.Pieces.Select(piece => piece.Text)).TrimEnd('\n') == source);
+
+    var document = ReaderDocuments.Parse("numbers.md", @"前向 \eqref{eq:a}
+
+\begin{align}
+a&=b\label{eq:a}\\
+c&=d
+\end{align}
+
+```tex
+\begin{equation}x=1\label{ignored}\end{equation}
+```");
+    var formula = document.Pieces.First().Formulas!.Entries.Single();
+    Check(formula.Source.Contains(@"\label{eq:a}") && formula.Display &&
+        document.Text.AsSpan(formula.Offset).StartsWith(@"\begin{align}"));
+    return Task.CompletedTask;
+});
 await Test("Reader math accepts Chinese adjacency and nested list formulas", () =>
 {
     var doc = ReaderDocuments.Parse("limits.md", "1. 唯一性：$f$在点$p$的极限存在。\n2. 对任意正数$\\varepsilon$，总有点$p$的邻域$\\mathring N_\\varepsilon(q)$。\n   - 设$\\lim f(x)=A,\\lim g(x)=B$，其中$k,l$为常数。\n   - $\\frac{f(x)}{g(x)}$为商。\n\n金额 $5 和 $10；转义 \\$x\\$；`$code$`。\n");
@@ -543,4 +781,3 @@ sealed class FragmentStream(byte[] bytes) : MemoryStream(bytes)
 {
     public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default) => base.ReadAsync(buffer[..Math.Min(buffer.Length, 3)], ct);
 }
-

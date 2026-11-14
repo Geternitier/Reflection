@@ -35,10 +35,13 @@ public sealed class ModelInfo
     public string ContextLimit { get; set; } = "";
     public bool Inspected { get; set; }
     public bool CapsChecked { get; set; }
+    // Null means the server did not advertise levels; an empty list omits the field.
+    public string[]? ReasoningEffortLevels { get; set; }
     public void CopyFrom(ModelInfo other)
     {
         SystemPrompt = other.SystemPrompt; Defaults = new(other.Defaults); Capabilities = [.. other.Capabilities];
         ContextLimit = other.ContextLimit; Inspected = other.Inspected; CapsChecked = other.CapsChecked;
+        ReasoningEffortLevels = other.ReasoningEffortLevels is { } levels ? [.. levels] : null;
     }
 }
 public sealed record ModelOption(ServiceConfig Service, string Model)
@@ -59,11 +62,12 @@ public sealed class ChatImage
     public string? ThumbnailAssetId { get; set; }
     public long EncodedLength { get; set; }
     public ImageCrop? Crop { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] public bool SquareCrop { get; set; }
     [JsonIgnore] public ImageAssetStore? Store { get; set; }
     public ChatImage Snapshot() => new()
     {
         Mime = Mime, Data = Data, AssetId = AssetId, OriginalAssetId = OriginalAssetId,
-        ThumbnailAssetId = ThumbnailAssetId, EncodedLength = EncodedLength, Crop = Crop, Store = Store
+        ThumbnailAssetId = ThumbnailAssetId, EncodedLength = EncodedLength, Crop = Crop, SquareCrop = SquareCrop, Store = Store
     };
 }
 public sealed record ImageCrop(double X, double Y, double Width, double Height);
@@ -101,6 +105,7 @@ public sealed class Conversation : Observable
     public CharacterCard? CharacterSnapshot { get; set; }
     public Guid? ServiceId { get; set; }
     public string? Model { get; set; }
+    public int? ContextWindowOverride { get; set; }
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.Now;
     public string Draft { get; set; } = "";
     public ObservableCollection<ChatMessage> Messages { get; set; } = [];
@@ -155,6 +160,7 @@ public sealed class CharacterCard
     public string Greeting { get; set; } = "";
     public string OpeningRole { get; set; } = "assistant";
     public ChatImage? Image { get; set; }
+    public ChatImage? Avatar { get; set; }
     [JsonIgnore] public string OpeningLabel => OpeningRole == "user" ? "我" : "对方";
     public override string ToString() => Name;
 }

@@ -1,3 +1,5 @@
+using Reflection.Core;
+
 namespace Reflection.Desktop;
 
 internal enum MarkupKind { Text, InlineCode, CodeBlock, InlineMath, DisplayMath, Table }
@@ -55,28 +57,10 @@ internal static class MessageMarkupTokenizer
                 if (end >= 0) { Emit(end + count, MarkupKind.InlineCode, i + count, end); continue; }
                 i += count; continue;
             }
-            string? closing = null; var block = false; var delimiterLength = 2;
-            if (c == '$' && i + 1 < source.Length && source[i + 1] == '$') { closing = "$$"; block = true; }
-            else if (c == '$' && i + 1 < source.Length && !char.IsWhiteSpace(source[i + 1]) && (i == 0 || source[i - 1] != '$')) { closing = "$"; delimiterLength = 1; }
-            else if (c == '\\' && i + 1 < source.Length && source[i + 1] is '(' or '[') { block = source[i + 1] == '['; closing = block ? "\\]" : "\\)"; }
-            if (closing is not null)
+            if (c is '$' or '\\' && MathDelimiters.TryRead(source, i, source.Length, out var math))
             {
-                var search = i + delimiterLength; var end = -1;
-                while (search < source.Length)
-                {
-                    var candidate = source.IndexOf(closing, search, StringComparison.Ordinal); if (candidate < 0) break;
-                    var escapes = 0; for (var k = candidate - 1; k >= i + delimiterLength && source[k] == '\\'; k--) escapes++;
-                    if (escapes % 2 == 0)
-                    {
-                        if (delimiterLength == 1 && (candidate == i + 1 || char.IsWhiteSpace(source[candidate - 1]) || source[candidate - 1] == '$' || (candidate + 1 < source.Length && (source[candidate + 1] == '$' || char.IsDigit(source[candidate + 1]))))) break;
-                        end = candidate; break;
-                    }
-                    search = candidate + closing.Length;
-                }
-                // Unclosed delimiters consume the remainder literally, not a nested partial formula.
-                if (end < 0) { if (delimiterLength == 1) { i++; continue; } i = source.Length; break; }
-                if (!block && source.AsSpan(i + delimiterLength, end - i - delimiterLength).Contains('\n')) { i = end + closing.Length; continue; }
-                Emit(end + closing.Length, block ? MarkupKind.DisplayMath : MarkupKind.InlineMath, i + delimiterLength, end); continue;
+                Emit(math.End, math.Display ? MarkupKind.DisplayMath : MarkupKind.InlineMath, math.ContentStart, math.ContentEnd);
+                continue;
             }
             i++;
         }

@@ -113,7 +113,7 @@ public sealed class LocalStore
         {
             await Task.Run(async () =>
             {
-                foreach (var card in snapshot) if (card.Image is not null) card.Image = await Images.ExternalizeAsync(card.Image);
+                foreach (var card in snapshot) await ExternalizeCharacterImagesAsync(card);
                 await WriteCore("characters.json", snapshot);
             });
         }
@@ -127,7 +127,7 @@ public sealed class LocalStore
         {
             await Task.Run(async () =>
             {
-                if (value.CharacterSnapshot?.Image is { } picture) value.CharacterSnapshot.Image = await Images.ExternalizeAsync(picture);
+                if (value.CharacterSnapshot is { } character) await ExternalizeCharacterImagesAsync(character);
                 for (var i = 0; i < value.Attachments.Count; i++) value.Attachments[i] = await Images.ExternalizeAsync(value.Attachments[i]);
                 foreach (var message in value.Messages)
                     for (var i = 0; i < message.Images.Count; i++) message.Images[i] = await Images.ExternalizeAsync(message.Images[i]);
@@ -173,12 +173,12 @@ public sealed class LocalStore
     {
         if (value is List<CharacterCard> cards)
         {
-            foreach (var card in cards) if (card.Image is not null) Images.Attach(card.Image);
+            foreach (var card in cards) BindCharacterImages(card);
         }
         else if (value is Conversation chat)
         {
             chat.Messages ??= []; chat.Attachments ??= [];
-            if (chat.CharacterSnapshot?.Image is { } picture) Images.Attach(picture);
+            if (chat.CharacterSnapshot is { } character) BindCharacterImages(character);
             foreach (var image in chat.Attachments) Images.Attach(image);
             foreach (var message in chat.Messages)
             {
@@ -186,6 +186,16 @@ public sealed class LocalStore
                 foreach (var image in message.Images) Images.Attach(image);
             }
         }
+    }
+    private async Task ExternalizeCharacterImagesAsync(CharacterCard card)
+    {
+        if (card.Image is { } image) card.Image = await Images.ExternalizeAsync(image);
+        if (card.Avatar is { } avatar) card.Avatar = await Images.ExternalizeAsync(avatar);
+    }
+    private void BindCharacterImages(CharacterCard card)
+    {
+        if (card.Image is { } image) Images.Attach(image);
+        if (card.Avatar is { } avatar) Images.Attach(avatar);
     }
     public async Task<int> CollectImageAssetsAsync(CancellationToken ct = default)
     {

@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Net.Http;
 using System.Text;
@@ -48,6 +49,7 @@ public sealed partial class MainViewModel : Observable, IDisposable
         {
             if (!Set(ref selectedModel, value)) return;
             Raise(nameof(VisionWarning));
+            NotifyMetrics();
             if (value is { Info.Inspected: false } model) _ = EnsureModelInfoAsync(model);
         }
     }
@@ -61,11 +63,18 @@ public sealed partial class MainViewModel : Observable, IDisposable
             Current.CharacterId = value?.Id;
             Current.CharacterSnapshot = ConversationOperations.Snapshot(value);
             Raise(nameof(Current));
-            Raise(nameof(CharacterName)); Raise(nameof(CharacterDescription));
+            NotifyCharacter();
         }
     }
     public string CharacterName => Current.CharacterSnapshot?.Name ?? "本地助手";
     public string CharacterDescription => Current.CharacterSnapshot?.Description is { Length: > 0 } description ? description : "";
+    public bool HasChatCharacter => Current.CharacterSnapshot is not null;
+    public ChatImage? CharacterAvatar => Current.CharacterSnapshot is { } card ? card.Avatar ?? card.Image : null;
+    private void NotifyCharacter()
+    {
+        Raise(nameof(CharacterName)); Raise(nameof(CharacterDescription));
+        Raise(nameof(HasChatCharacter)); Raise(nameof(CharacterAvatar));
+    }
     private CharacterCard? detailCard;
     public CharacterCard? DetailCard { get => detailCard; set => Set(ref detailCard, value); }
     private long draftRevision, savedDraftRevision;
@@ -91,6 +100,7 @@ public sealed partial class MainViewModel : Observable, IDisposable
     {
         Raise(nameof(Busy)); Raise(nameof(AnyBusy)); Raise(nameof(Idle));
         Raise(nameof(SendLabel)); Raise(nameof(HelpLabel)); Raise(nameof(Status));
+        NotifyMetrics();
     }
     private GenerationRun BeginRun(string activity)
     {
@@ -99,7 +109,11 @@ public sealed partial class MainViewModel : Observable, IDisposable
         var service = original.Service;
         var model = new ModelOption(new ServiceConfig { Id = service.Id, Name = service.Name, BaseUrl = service.BaseUrl, Protocol = service.Protocol, Enabled = service.Enabled }, original.Model);
         model.Info.CopyFrom(original.Info);
-        var run = new GenerationRun(Current, model, JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(Settings))!, CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token), activity);
+        var settings = JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(Settings))!;
+        settings.ParamDefaults.Remove("num_ctx");
+        if (Current.ContextWindowOverride is >= 1 and <= Prompting.MaxContextWindow)
+            settings.ParamDefaults["num_ctx"] = Current.ContextWindowOverride.Value.ToString(CultureInfo.InvariantCulture);
+        var run = new GenerationRun(Current, model, settings, CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token), activity);
         runs.Add(Current.Id, run); Current.UpdatedAt = DateTimeOffset.Now; NotifyActivity(); return run;
     }
     private void SetRunStatus(GenerationRun run, string text)
@@ -148,7 +162,6 @@ public sealed partial class MainViewModel : Observable, IDisposable
         if (seedCharacters) await Store.SaveCharactersAsync(Characters.ToList());
         var summaries = await Store.LoadIndexAsync();
         foreach (var chat in summaries.OrderByDescending(x => x.UpdatedAt)) Conversations.Add(chat);
-        SelectedCharacter = Characters.FirstOrDefault();
         DetailCard = Characters.FirstOrDefault();
         Raise(nameof(ReasonLabel));
         Status = Store.RecoveryNotice ?? "";
@@ -167,7 +180,7 @@ public sealed partial class MainViewModel : Observable, IDisposable
     public void RestoreCharacter(CharacterCard? snapshot, Guid? id)
     {
         Current.CharacterSnapshot = snapshot; Current.CharacterId = id;
-        Raise(nameof(CharacterName)); Raise(nameof(CharacterDescription)); Raise(nameof(Current));
+        NotifyCharacter(); Raise(nameof(Current));
     }
     private async Task DraftLoopAsync()
     {
@@ -241,12 +254,9 @@ public sealed partial class MainViewModel : Observable, IDisposable
             loading = true; Raise(nameof(Idle));
             await PersistDraftAsync();
             Current = runs.TryGetValue(summary.Id, out var active) ? active.Chat : await Store.LoadConversationAsync(summary.Id);
-            var snapshot = Current.CharacterSnapshot;
-            var characterId = Current.CharacterId;
-            SelectedCharacter = Characters.FirstOrDefault(x => x.Id == characterId);
-            if (snapshot is not null) { Current.CharacterSnapshot = snapshot; Current.CharacterId = characterId; }
+            Set(ref selectedCharacter, Characters.FirstOrDefault(x => x.Id == Current.CharacterId), nameof(SelectedCharacter));
             RefreshCharacter(Current);
-            Raise(nameof(CharacterName)); Raise(nameof(CharacterDescription));
+            NotifyCharacter();
             SelectedModel = Models.FirstOrDefault(x => x.Service.Id == Current.ServiceId && x.Model == Current.Model) ?? SelectedModel;
             Draft = Current.Draft ?? "";
             if (Store.RecoveryNotice is { } notice) Status = notice;
@@ -263,11 +273,12 @@ public sealed partial class MainViewModel : Observable, IDisposable
             loading = true; Raise(nameof(Idle));
             var reuse = IsUnused();
             if (!reuse) await PersistDraftAsync();
-            if (reuse && character is null) { Status = ""; return; }
             if (!reuse) Current = new();
             else Current.Messages.Clear();
+            Current.ContextWindowOverride = null;
             Draft = ""; Current.Draft = ""; Current.Attachments.Clear();
-            ApplyCharacter(character ?? SelectedCharacter ?? Characters.FirstOrDefault());
+            ApplyCharacter(character);
+            NotifyMetrics();
             if (!IsUnused()) await SaveCurrentAsync();
             Status = "";
         }
@@ -360,11 +371,11 @@ public sealed partial class MainViewModel : Observable, IDisposable
         if (loading) return;
         await StopRunAsync(id);
         await Store.DeleteConversationAsync(id);
+        lastMetrics.Remove(id);
         var item = Conversations.FirstOrDefault(x => x.Id == id); if (item is not null) Conversations.Remove(item);
         if (Current.Id != id) return;
         Current = new(); Draft = "";
-        ApplyCharacter(SelectedCharacter ?? Characters.FirstOrDefault());
-        if (!IsUnused()) await SaveCurrentAsync();
+        ApplyCharacter(null);
     }
     public async Task RenameAsync(ConversationSummary summary)
     {
@@ -394,7 +405,7 @@ public sealed partial class MainViewModel : Observable, IDisposable
             var live = runs.Values.Select(run => run.Chat).Append(Current).DistinctBy(chat => chat.Id).ToDictionary(chat => chat.Id);
             foreach (var chat in live.Values) ConversationOperations.RefreshCharacter(chat, edited);
             if (selectedCharacter?.Id == edited.Id) { selectedCharacter = edited; Raise(nameof(SelectedCharacter)); }
-            Raise(nameof(CharacterName)); Raise(nameof(CharacterDescription));
+            NotifyCharacter();
             foreach (var summary in Conversations.ToArray())
             {
                 var chat = live.GetValueOrDefault(summary.Id) ?? await Store.LoadConversationAsync(summary.Id);
@@ -469,19 +480,24 @@ public sealed partial class MainViewModel : Observable, IDisposable
     private async Task GenerateAsync(GenerationRun run, ChatMessage answer, string prefix, string prior, IReadOnlyList<ChatMessage>? continuation)
     {
         var raw = new StringBuilder(); var thoughts = new StringBuilder(); var watch = Stopwatch.StartNew(); long painted = 0;
+        GenerationMetrics? metrics = null;
         try
         {
             await SaveConversationAsync(run.Chat);
             await EnsureModelInfoAsync(run.Model);
             SetRunStatus(run, continuation is null ? $"{run.Model.Service.Name} 正在思考…" : "正在接着写…"); ScrollRun(run);
             var history = continuation ?? run.Chat.Messages.Where(x => x != answer).ToArray();
-            await foreach (var delta in inference.StreamAsync(run.Model, history, SystemFor(run), run.Settings, run.Cancel.Token, run.Model.Info, continuation is null ? null : Prompting.ContinueCue, ImageProgress(run)))
+            await foreach (var delta in inference.StreamAsync(run.Model, history, SystemFor(run), run.Settings, run.Cancel.Token,
+                run.Model.Info, continuation is null ? null : Prompting.ContinueCue, ImageProgress(run), collectMetrics: true))
             {
+                if (delta.Metrics is { } measurement) { metrics = measurement; continue; }
                 raw.Append(delta.Text); thoughts.Append(delta.Thinking);
                 if (prefix.Length + raw.Length + thoughts.Length > 500_000) throw new IOException("回复已达到 50 万字符上限，已停止生成。");
                 if (watch.ElapsedMilliseconds - painted > 50) { Paint(answer, raw, thoughts, prefix, prior); painted = watch.ElapsedMilliseconds; ScrollRun(run); }
             }
             Paint(answer, raw, thoughts, prefix, prior); answer.Incomplete = false;
+            if (metrics is null) lastMetrics.Remove(run.Chat.Id);
+            else lastMetrics[run.Chat.Id] = (new(run.Model), metrics);
             SetRunStatus(run, $"已完成 · {watch.Elapsed.TotalSeconds:F1} 秒 · {answer.Content.Length:N0} 字符");
         }
         catch (OperationCanceledException)
@@ -536,6 +552,7 @@ public sealed partial class MainViewModel : Observable, IDisposable
         Unhook(current); current = value; Hook(current);
         status = ""; NotifyActivity();
         Raise(nameof(Current)); Raise(nameof(IsEmpty)); Raise(nameof(HasAttachments)); Raise(nameof(VisionWarning));
+        NotifyCharacter();
         MarkTail();
     }
     private void Hook(Conversation chat)

@@ -17,6 +17,9 @@ public partial class MainWindow
     {
         ShowPage("reader"); await ReaderPage.InitializeAsync();
         await ReaderPage.VerifyAsync(output);
+        await ReaderPage.VerifyLocalImagesAsync(output);
+        await ReaderPage.VerifyFootnotesAndWikiLinksAsync();
+        await ReaderPage.VerifyMathCompatibilityAsync();
         var extras = Enumerable.Range(0, 1000).Select(i => new CharacterCard { Name = "虚拟角色 " + i }).ToArray();
         try
         {
@@ -51,6 +54,46 @@ public partial class MainWindow
 
 public partial class ReaderView
 {
+    internal async Task VerifyFootnotesAndWikiLinksAsync()
+    {
+        var folder = Path.Combine(Owner.VM.Store.Root, "markdown-links");
+        Directory.CreateDirectory(folder);
+        var path = Path.Combine(folder, "index.md");
+        var sibling = Path.Combine(folder, "相邻文档.md");
+        var spacer = string.Concat(Enumerable.Repeat("这是可滚动的正文。\n\n", 160));
+        await File.WriteAllTextAsync(path, "# 开始\n\n链接[^note] 与 [[相邻文档#目标 章节|查看章节]]。\n\n"
+            + spacer + "[^note]: 脚注内容。\n\n" + spacer);
+        await File.WriteAllTextAsync(sibling, "# 起始章节\n\n" + spacer + "## 目标 章节\n\n" + spacer);
+        await OpenDocumentAsync(path);
+        Pages.UpdateLayout();
+        var viewer = SmoothScroll.Viewer(Pages)!;
+
+        Hyperlink FindLink(string label) => MainWindow.Descendants<ReadingText>(Pages)
+            .SelectMany(text => text.Document.Blocks.OfType<Paragraph>()
+                .Concat(text.Document.Blocks.OfType<Section>().SelectMany(section => section.Blocks.OfType<Paragraph>())))
+            .SelectMany(paragraph => paragraph.Inlines.OfType<Hyperlink>())
+            .Single(link => new TextRange(link.ContentStart, link.ContentEnd).Text == label);
+
+        async Task ClickAsync(string label)
+        {
+            FindLink(label).RaiseEvent(new RoutedEventArgs(Hyperlink.ClickEvent));
+            await Dispatcher.InvokeAsync(Pages.UpdateLayout, DispatcherPriority.ContextIdle);
+        }
+
+        await ClickAsync("[1]");
+        if (viewer.VerticalOffset <= viewer.ViewportHeight) throw new InvalidOperationException("Reader footnote did not scroll across document pieces");
+        await ClickAsync("返回引用");
+        if (viewer.VerticalOffset > 20) throw new InvalidOperationException("Reader footnote backlink did not return to the reference");
+        await ClickAsync("查看章节");
+        for (var attempt = 0; attempt < 30 && (document?.Path != sibling || viewer.VerticalOffset <= viewer.ViewportHeight); attempt++)
+        {
+            await Task.Delay(25);
+            Pages.UpdateLayout();
+        }
+        if (document?.Path != sibling || viewer.VerticalOffset <= viewer.ViewportHeight)
+            throw new InvalidOperationException("Relative wiki link did not open the target document at its heading");
+    }
+
     internal async Task VerifyAsync(string output)
     {
         var fixture = Path.Combine(Owner.VM.Store.Root, "reader-fixture"); Directory.CreateDirectory(fixture);
@@ -69,6 +112,15 @@ public partial class ReaderView
         var text = MainWindow.Descendants<ReadingText>(Pages).ToArray();
         if (text.Sum(t => t.RenderedFormulaCount) < 3) throw new InvalidOperationException("Markdown file math did not render");
         if (text.Length == 0 || text[0].TextSize != 18 || !text.Any(t => new TextRange(t.Document.ContentStart, t.Document.ContentEnd).Text.Contains("阅读示例"))) throw new InvalidOperationException("Reader data/typography bindings failed");
+        var initialFocus = focus;
+        foreach (var expected in new[] { !initialFocus, initialFocus })
+        {
+            var shortcut = new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(Pages)!, 0, Key.F11)
+                { RoutedEvent = Keyboard.PreviewKeyDownEvent };
+            Pages.RaiseEvent(shortcut);
+            if (!shortcut.Handled || focus != expected || expected && (LibraryPanel.IsVisible || InspectorPanel.IsVisible))
+                throw new InvalidOperationException("F11 did not toggle focus mode from the reader");
+        }
         App.Capture(Owner, Path.Combine(output, "reader-markdown.png"));
         const string limits = "# 函数极限的性质\n\n1. 唯一性：$f$在点$p$的极限存在，则该极限的值唯一。\n2. 局部有界性：对任意小的正数$\\varepsilon$，总有点$p$的一个邻域使函数值在$\\mathring N_\\varepsilon(q)$中。\n   - 对应实函数的局部有界性和局部保号性。\n\n## 一元实函数极限的性质\n\n1. 运算法则：$f,g:X\\to\\mathbb{R}$，设$\\lim f(x)=A,\\lim g(x)=B$，有\n   1. $\\lim[kf(x)+lg(x)]=kA+lB$，其中$k,l$为常数。\n   2. $\\lim[f(x)g(x)]=AB$。\n   3. $\\lim\\frac{f(x)}{g(x)}=\\frac{A}{B},B\\ne0$。\n";
         var limitsPath = Path.Combine(fixture, "极限.md"); await File.WriteAllTextAsync(limitsPath, limits);

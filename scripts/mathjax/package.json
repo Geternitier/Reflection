@@ -1,0 +1,13 @@
+{
+  "name": "reflection-mathjax-bundle",
+  "private": true,
+  "scripts": {
+    "bundle": "esbuild render.js --bundle --platform=neutral --target=es2022 --minify --legal-comments=inline --outfile=../../src/Reflection.Desktop/Assets/MathJax.js"
+  },
+  "dependencies": {
+    "mathjax-full": "3.2.2"
+  },
+  "devDependencies": {
+    "esbuild": "0.27.2"
+  }
+}

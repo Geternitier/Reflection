@@ -114,9 +114,9 @@ public sealed class ImagePipeline : IAsyncDisposable, IDisposable
         var original = Put(bytes);
         return Variant(original, null, bytes);
     }
-    private ChatImage Variant(string original, ImageCrop? crop, byte[]? raw = null, bool rebuild = false)
+    private ChatImage Variant(string original, ImageCrop? crop, byte[]? raw = null, bool rebuild = false, bool squareCrop = false)
     {
-        var key = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("image-v1:1280:360:jpeg86:png:" + original + ":" + JsonSerializer.Serialize(crop))));
+        var key = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes("image-v1:1280:360:jpeg86:png:" + original + ":" + JsonSerializer.Serialize(crop) + (squareCrop ? ":square" : ""))));
         var variants = Path.Combine(Path.GetDirectoryName(assets.DirectoryPath)!, "variants");
         var path = Path.Combine(variants, key + ".json");
         if (!rebuild && File.Exists(path))
@@ -124,7 +124,7 @@ public sealed class ImagePipeline : IAsyncDisposable, IDisposable
             try
             {
                 var cached = JsonSerializer.Deserialize<ChatImage>(File.ReadAllText(path), LocalStore.Json);
-                if (cached is not null && cached.OriginalAssetId == original && cached.Crop == crop)
+                if (cached is not null && cached.OriginalAssetId == original && cached.Crop == crop && cached.SquareCrop == squareCrop)
                 { assets.Attach(cached); return cached; }
             }
             catch (Exception ex) when (ex is JsonException or IOException or ArgumentException)
@@ -142,11 +142,13 @@ public sealed class ImagePipeline : IAsyncDisposable, IDisposable
             var width = Math.Max(1, Math.Min(decoded.PixelWidth - x, (int)Math.Round(crop.Width * decoded.PixelWidth)));
             var height = Math.Max(1, Math.Min(decoded.PixelHeight - y, (int)Math.Round(crop.Height * decoded.PixelHeight)));
             var cropped = new CroppedBitmap(decoded, new Int32Rect(x, y, width, height));
-            // Preserve the exact 3:4 output size, including rounding at small source dimensions.
-            var unit = Math.Max(1, Math.Min(320, (int)Math.Floor(Math.Min(width / 3d, height / 4d))));
+            // Preserve the requested aspect ratio after rounding normalized crop coordinates.
+            var horizontal = squareCrop ? 1 : 3;
+            var vertical = squareCrop ? 1 : 4;
+            var unit = Math.Max(1, Math.Min(1280 / vertical, Math.Min(width / horizontal, height / vertical)));
             var visual = new DrawingVisual();
-            using (var dc = visual.RenderOpen()) dc.DrawImage(cropped, new Rect(0, 0, unit * 3, unit * 4));
-            var target = new RenderTargetBitmap(unit * 3, unit * 4, 96, 96, PixelFormats.Pbgra32); target.Render(visual); source = target;
+            using (var dc = visual.RenderOpen()) dc.DrawImage(cropped, new Rect(0, 0, unit * horizontal, unit * vertical));
+            var target = new RenderTargetBitmap(unit * horizontal, unit * vertical, 96, 96, PixelFormats.Pbgra32); target.Render(visual); source = target;
         }
         // JPEG stays photographic; other formats retain transparency and sharp screenshot edges.
         var originalBytes = raw ?? Read(original);
@@ -157,7 +159,7 @@ public sealed class ImagePipeline : IAsyncDisposable, IDisposable
         {
             Mime = main.Mime, AssetId = Put(Convert.FromBase64String(main.Data)),
             OriginalAssetId = original, ThumbnailAssetId = Put(Convert.FromBase64String(thumbnail.Data)),
-            Crop = crop, EncodedLength = main.Data.Length, Store = assets
+            Crop = crop, SquareCrop = squareCrop, EncodedLength = main.Data.Length, Store = assets
         };
         Directory.CreateDirectory(variants);
         var temp = path + "." + Guid.NewGuid() + ".tmp";
@@ -168,8 +170,9 @@ public sealed class ImagePipeline : IAsyncDisposable, IDisposable
     private static bool ValidCrop(ImageCrop crop) =>
         double.IsFinite(crop.X) && double.IsFinite(crop.Y) && double.IsFinite(crop.Width) && double.IsFinite(crop.Height)
         && crop.X >= 0 && crop.Y >= 0 && crop.Width > 0 && crop.Height > 0 && crop.X + crop.Width <= 1.000001 && crop.Y + crop.Height <= 1.000001;
-    internal Task<ChatImage> CropAsync(ChatImage image, ImageCrop crop, CancellationToken ct) =>
-        RunAsync("crop:" + (image.OriginalAssetId ?? image.AssetId) + ":" + JsonSerializer.Serialize(crop), () => Variant(image.OriginalAssetId ?? image.AssetId ?? throw new IOException("图片原图缺失。"), crop), ct);
+    internal Task<ChatImage> CropAsync(ChatImage image, ImageCrop crop, CancellationToken ct, bool squareCrop = false) =>
+        RunAsync("crop:" + (image.OriginalAssetId ?? image.AssetId) + ":" + JsonSerializer.Serialize(crop) + ":" + squareCrop,
+            () => Variant(image.OriginalAssetId ?? image.AssetId ?? throw new IOException("图片原图缺失。"), crop, squareCrop: squareCrop), ct);
     internal async Task<ChatImage> NormalizeAsync(ChatImage image, CancellationToken ct)
     {
         image = image.Snapshot();
@@ -184,15 +187,7 @@ public sealed class ImagePipeline : IAsyncDisposable, IDisposable
         if (image.Store is { } origin && !string.Equals(origin.DirectoryPath, assets.DirectoryPath, StringComparison.OrdinalIgnoreCase)) throw new IOException("不能跨工作区读取图片。");
         var id = original ? image.OriginalAssetId ?? image.AssetId : limit <= 360 ? image.ThumbnailAssetId ?? image.AssetId : image.AssetId;
         var key = $"view:{id ?? legacyKeys.GetValue(image.Data, _ => new()).Key}:{limit}:{original}";
-        lock (gate)
-        {
-            var node = bitmaps.First;
-            while (node is not null)
-            {
-                if (node.Value.Key == key) { bitmaps.Remove(node); bitmaps.AddFirst(node); return Task.FromResult(node.Value.Image); }
-                node = node.Next;
-            }
-        }
+        if (FindBitmap(key) is { } cached) return Task.FromResult(cached);
         return RunAsync(key, () =>
         {
             if (image.Store is { } origin && !string.Equals(origin.DirectoryPath, assets.DirectoryPath, StringComparison.OrdinalIgnoreCase)) throw new IOException("不能跨工作区读取图片。");
@@ -200,22 +195,60 @@ public sealed class ImagePipeline : IAsyncDisposable, IDisposable
             try { bytes = id is null ? Convert.FromBase64String(image.Data) : Read(id); }
             catch (IOException) when (!original && limit <= 360 && image.ThumbnailAssetId is not null && image.OriginalAssetId is not null)
             {
-                var rebuilt = Variant(image.OriginalAssetId, image.Crop, rebuild: true);
+                var rebuilt = Variant(image.OriginalAssetId, image.Crop, rebuild: true, squareCrop: image.SquareCrop);
                 bytes = Read(rebuilt.ThumbnailAssetId!);
             }
-            using var stream = new MemoryStream(bytes);
-            var bitmap = ImageCodec.Decode(stream, limit); DecodedBitmaps++;
-            lock (gate)
-            {
-                if (!disposed)
-                {
-                    bitmaps.AddFirst((key, bitmap)); pixels += (long)bitmap.PixelWidth * bitmap.PixelHeight;
-                    while (bitmaps.Count > 32 || pixels > 12_000_000)
-                    { var last = bitmaps.Last!.Value; pixels -= (long)last.Image.PixelWidth * last.Image.PixelHeight; bitmaps.RemoveLast(); }
-                }
-            }
-            return (BitmapSource)bitmap;
+            return DecodeCached(key, bytes, limit);
         }, ct);
+    }
+
+    internal Task<BitmapSource> DisplayLocalAsync(string path, int limit, CancellationToken ct) =>
+        RunAsync($"reader:{path}:{limit}", () =>
+        {
+            var root = Path.GetPathRoot(path);
+            if (root is not { Length: 3 } || root[1] != ':' || new DriveInfo(root).DriveType is not
+                (DriveType.Fixed or DriveType.Removable or DriveType.CDRom or DriveType.Ram))
+                throw new IOException("图片引用需要指向本机磁盘。");
+            var current = root;
+            foreach (var part in path[root.Length..].Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+            {
+                current = Path.Combine(current, part);
+                if ((File.GetAttributes(current) & (FileAttributes.ReparsePoint | FileAttributes.Device)) != 0)
+                    throw new IOException("图片路径包含重解析项。");
+            }
+            var file = new FileInfo(path);
+            var key = $"reader:{path}:{limit}:{file.Length}:{file.LastWriteTimeUtc.Ticks}";
+            return FindBitmap(key) ?? DecodeCached(key, ReadFile(path), limit);
+        }, ct);
+
+    private BitmapSource? FindBitmap(string key)
+    {
+        lock (gate)
+        {
+            var node = bitmaps.First;
+            while (node is not null)
+            {
+                if (node.Value.Key == key) { bitmaps.Remove(node); bitmaps.AddFirst(node); return node.Value.Image; }
+                node = node.Next;
+            }
+            return null;
+        }
+    }
+
+    private BitmapSource DecodeCached(string key, byte[] bytes, int limit)
+    {
+        using var stream = new MemoryStream(bytes);
+        var bitmap = ImageCodec.Decode(stream, limit); DecodedBitmaps++;
+        lock (gate)
+        {
+            if (!disposed)
+            {
+                bitmaps.AddFirst((key, bitmap)); pixels += (long)bitmap.PixelWidth * bitmap.PixelHeight;
+                while (bitmaps.Count > 32 || pixels > 12_000_000)
+                { var last = bitmaps.Last!.Value; pixels -= (long)last.Image.PixelWidth * last.Image.PixelHeight; bitmaps.RemoveLast(); }
+            }
+        }
+        return bitmap;
     }
     public void Dispose()
     {
