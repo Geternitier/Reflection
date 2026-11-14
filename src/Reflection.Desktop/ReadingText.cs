@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
@@ -15,6 +16,8 @@ namespace Reflection.Desktop;
 
 public sealed class ReadingText : MarkdownText
 {
+    private static readonly FontFamily SerifFont = new("Georgia, SimSun");
+    private static readonly FontFamily SansSerifFont = new("Microsoft YaHei UI");
     public static readonly DependencyProperty PieceProperty = DependencyProperty.Register(nameof(Piece), typeof(ReadingPiece), typeof(ReadingText), new PropertyMetadata(null, Change));
     public static readonly DependencyProperty TextSizeProperty = DependencyProperty.Register(nameof(TextSize), typeof(double), typeof(ReadingText), new PropertyMetadata(18d, Change));
     public static readonly DependencyProperty LeadingProperty = DependencyProperty.Register(nameof(Leading), typeof(double), typeof(ReadingText), new PropertyMetadata(1.85d, Change));
@@ -30,6 +33,8 @@ public sealed class ReadingText : MarkdownText
     private (double, double, bool, int) renderedStyle;
     private int formulas;
     private bool inTable;
+    private (double Digit, double Period)? markerWidths;
+    private FontFamily BodyFont => Serif ? SerifFont : SansSerifFont;
     internal int RenderedFormulaCount { get; private set; }
     private static void Change(DependencyObject obj, DependencyPropertyChangedEventArgs e) { var view = (ReadingText)obj; if (view.IsVisible) view.Render(); }
     private static Brush Color(string key) => (Brush)Application.Current.FindResource(key);
@@ -39,8 +44,9 @@ public sealed class ReadingText : MarkdownText
         var style = (TextSize, Leading, Serif, ThemeManager.Revision);
         if (piece is null || ReferenceEquals(piece, renderedPiece) && style == renderedStyle) return;
         renderedPiece = piece; renderedStyle = style; formulas = 0; RenderedFormulaCount = 0; ResetFormulaBudget();
+        markerWidths = null;
         var doc = new FlowDocument { PagePadding = new Thickness(0), FontSize = TextSize,
-            FontFamily = new FontFamily(Serif ? "Georgia, SimSun" : "Microsoft YaHei UI"), Foreground = Color("Ink"),
+            FontFamily = BodyFont, Foreground = Color("Ink"),
             LineHeight = TextSize * Leading, LineStackingStrategy = LineStackingStrategy.MaxHeight };
         if (piece.Text is { } text)
         {
@@ -49,7 +55,12 @@ public sealed class ReadingText : MarkdownText
             {
                 var paragraph = new Paragraph(new Run(text.TrimEnd('\r', '\n'))) { Margin = new Thickness(0, 0, 0, 12) };
                 if (piece.Code) CodeStyle(paragraph);
-                if (piece.Heading > 0) HeadingStyle(paragraph, piece.Heading);
+                if (piece.Heading > 0)
+                {
+                    HeadingStyle(paragraph, 1.7);
+                    var line = TextSize * Leading;
+                    paragraph.Margin = new Thickness(0, line * .55, 0, line * .35);
+                }
                 doc.Blocks.Add(paragraph);
             }
         }
@@ -78,16 +89,70 @@ public sealed class ReadingText : MarkdownText
             else Current().Inlines.Add(new InlineUIContainer(scroll) { BaselineAlignment = BaselineAlignment.Center });
         }
     }
-    private void HeadingStyle(Paragraph p, int level)
+    private void HeadingStyle(Paragraph paragraph, double scale)
     {
-        p.FontFamily = new FontFamily("Microsoft YaHei UI"); p.FontSize = TextSize * (level == 1 ? 1.7 : level == 2 ? 1.4 : 1.15);
-        p.FontWeight = FontWeights.SemiBold; p.Margin = new Thickness(0, TextSize * Leading * .55, 0, TextSize * Leading * .35); p.LineHeight = p.FontSize * Leading;
+        paragraph.FontFamily = SansSerifFont;
+        paragraph.FontSize = TextSize * scale;
+        paragraph.FontWeight = FontWeights.SemiBold;
+        paragraph.LineHeight = paragraph.FontSize * Leading;
+    }
+
+    private void MarkdownHeadingStyle(Paragraph paragraph, int level)
+    {
+        HeadingStyle(paragraph, level switch
+        {
+            1 => 1.7,
+            2 => 1.48,
+            3 => 1.33,
+            4 => 1.22,
+            5 => 1.13,
+            _ => 1.05
+        });
+        var line = TextSize * Leading;
+        // Keep heading spacing inside the block at virtualized document boundaries.
+        paragraph.Margin = new Thickness(0);
+        paragraph.Padding = new Thickness(0, line * (level <= 2 ? .65 : .45), 0, line * .45);
     }
     private void CodeStyle(Paragraph p)
     {
         p.FontFamily = new FontFamily("Cascadia Code, Consolas"); p.FontSize = TextSize * .82;
         p.LineHeight = TextSize * 1.45; p.Background = Color("Sidebar"); p.Padding = new Thickness(14); p.Margin = new Thickness(0, 4, 0, 12);
     }
+
+    private void StyleBulletList(System.Windows.Documents.List result, ListBlock list)
+    {
+        var level = 0;
+        for (var parent = list.Parent; parent is not null; parent = parent.Parent)
+            if (parent is ListBlock) level++;
+
+        var (marker, scale) = level switch
+        {
+            0 => (TextMarkerStyle.Box, 1.0),
+            1 => (TextMarkerStyle.Disc, .78),
+            _ => (TextMarkerStyle.Disc, .48)
+        };
+        result.MarkerStyle = marker;
+        result.FontSize = TextSize * scale;
+    }
+
+    private void SizeNumberedList(System.Windows.Documents.List list)
+    {
+        if (markerWidths is not { } widths)
+        {
+            var typeface = new Typeface(BodyFont, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
+            var dpi = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+            double Width(char character) => new FormattedText(character.ToString(), CultureInfo.InvariantCulture,
+                FlowDirection.LeftToRight, typeface, TextSize, Brushes.Black, dpi).Width;
+            widths = ("0123456789".Max(Width), Width('.'));
+            markerWidths = widths;
+        }
+
+        var last = Math.Min(int.MaxValue, (long)list.StartIndex + list.ListItems.Count - 1);
+        var digits = last.ToString(CultureInfo.InvariantCulture).Length;
+        var indent = digits * widths.Digit + widths.Period + list.MarkerOffset;
+        list.Padding = new Thickness(Math.Max(26, Math.Ceiling(indent) + 2), 0, 0, 0);
+    }
+
     private void AddBlock(BlockCollection target, Markdig.Syntax.Block node, int depth)
     {
         if (depth > 24) { target.Add(new Paragraph(new Run("内容嵌套过深"))); return; }
@@ -105,15 +170,22 @@ public sealed class ReadingText : MarkdownText
         if (node is CodeBlock code) { var p = new Paragraph(new Run(code.Lines.ToString())); CodeStyle(p); target.Add(p); return; }
         if (node is ListBlock list)
         {
-            var result = new System.Windows.Documents.List { MarkerStyle = list.IsOrdered ? TextMarkerStyle.Decimal : TextMarkerStyle.Disc, Padding = new Thickness(26, 0, 0, 0), Margin = new Thickness(0, 0, 0, 10) };
+            var result = new System.Windows.Documents.List { MarkerStyle = TextMarkerStyle.Decimal, MarkerOffset = TextSize * .45,
+                Padding = new Thickness(26, 0, 0, 0), Margin = new Thickness(0, 0, 0, 10) };
+            if (!list.IsOrdered) StyleBulletList(result, list);
             var first = ReferenceEquals(Piece?.Blocks.FirstOrDefault(), node) ? Piece.First : 0;
             var count = ReferenceEquals(Piece?.Blocks.FirstOrDefault(), node) ? Piece.Count : int.MaxValue;
-            if (list.IsOrdered && int.TryParse(list.OrderedStart, out var number)) result.StartIndex = Math.Clamp(number + first, 1, int.MaxValue);
+            if (list.IsOrdered && int.TryParse(list.OrderedStart, out var number))
+                result.StartIndex = (int)Math.Clamp((long)number + first, 1, int.MaxValue);
             foreach (var item in list.Skip(first).Take(count).OfType<ListItemBlock>())
             {
-                var li = new ListItem(); foreach (var child in item) AddBlock(li.Blocks, child, depth + 1);
+                var li = new ListItem();
+                // WPF sizes markers from the list and inherits body typography through each item.
+                if (!list.IsOrdered) li.FontSize = TextSize;
+                foreach (var child in item) AddBlock(li.Blocks, child, depth + 1);
                 if (li.Blocks.Count == 0) li.Blocks.Add(new Paragraph()); result.ListItems.Add(li);
             }
+            if (list.IsOrdered) SizeNumberedList(result);
             target.Add(result); return;
         }
         if (node is QuoteBlock quote)
@@ -125,7 +197,7 @@ public sealed class ReadingText : MarkdownText
         if (node is LeafBlock leaf)
         {
             var p = new Paragraph { Margin = new Thickness(0, 0, 0, TextSize * .65) };
-            if (node is HeadingBlock heading) HeadingStyle(p, heading.Level);
+            if (node is HeadingBlock heading) MarkdownHeadingStyle(p, heading.Level);
             AddInline(p.Inlines, leaf.Inline, depth + 1); target.Add(p); return;
         }
         if (node is ContainerBlock container) foreach (var child in container) AddBlock(target, child, depth + 1);
