@@ -2,13 +2,15 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Markdig;
 using Markdig.Extensions.Footnotes;
+using Markdig.Extensions.Mathematics;
+using Markdig.Extensions.Tables;
 using Markdig.Syntax;
 using Markdig.Syntax.Inlines;
 
 namespace Reflection.Core;
 
 public sealed record ReadingHeading(string Title, int Level, int Piece, string Anchor);
-public sealed record ReadingPiece(int Offset, int Length, IReadOnlyList<Block> Blocks, string? Text = null, bool Code = false, int Heading = 0, int First = 0, int Count = int.MaxValue, string? SourcePath = null, string? MarkdownSource = null, string? CodeLanguage = null, int CodeLine = 1);
+public sealed record ReadingPiece(int Offset, int Length, IReadOnlyList<Block> Blocks, string? Text = null, bool Code = false, int Heading = 0, int First = 0, int Count = int.MaxValue, string? SourcePath = null, string? MarkdownSource = null, string? CodeLanguage = null, int CodeLine = 1, ReaderFormulaIndex? Formulas = null, int MathOffset = 0);
 public sealed record ReadingDocument(string Path, string Text, string Encoding, IReadOnlyList<ReadingPiece> Pieces, IReadOnlyList<ReadingHeading> Outline);
 
 // Parsing creates data only; the dispatcher materializes just the nearby pieces.
@@ -54,36 +56,71 @@ public static partial class ReaderDocuments
     {
         token.ThrowIfCancellationRequested();
         var pieces = new List<ReadingPiece>(); var headings = new List<ReadingHeading>();
+        ReaderFormulaIndex? formulas;
         if (Path.GetExtension(path).Equals(".txt", StringComparison.OrdinalIgnoreCase))
         {
+            var mathRanges = MathDelimiters.FindRanges(text);
+            formulas = ReaderFormulaIndex.FromText(text, mathRanges);
+            var rangeIndex = 0;
+            var firstFormula = 0;
+            var formulaBoundary = int.MaxValue;
             var offset = 0; var pending = new StringBuilder(); var start = 0;
             void Flush() { if (pending.Length == 0) return; pieces.Add(new(start, pending.Length, [], pending.ToString())); pending.Clear(); }
             foreach (var line in text.Split('\n'))
             {
                 token.ThrowIfCancellationRequested();
-                if (Chapter().IsMatch(line.Trim()) && line.Trim().Length <= 100)
+                if (!MathDelimiters.ContainsOffset(mathRanges, ref rangeIndex, offset) && Chapter().IsMatch(line.Trim()) && line.Trim().Length <= 100)
                 {
                     Flush(); headings.Add(new(line.Trim(), 1, pieces.Count, "chapter-" + offset));
                     pieces.Add(new(offset, line.Length, [], line.Trim(), Heading: 1)); offset += line.Length + 1; start = offset; continue;
                 }
                 for (var index = 0; index < line.Length;)
                 {
-                    if (pending.Length == 0) start = offset + index;
+                    var current = offset + index;
+                    if (current == formulaBoundary) Flush();
+                    if (pending.Length == 0)
+                    {
+                        start = current;
+                        while (firstFormula < mathRanges.Count && mathRanges[firstFormula].Start < start) firstFormula++;
+                        var next = firstFormula + MathDelimiters.MaxFormulasPerRender;
+                        formulaBoundary = next < mathRanges.Count ? mathRanges[next].Start : int.MaxValue;
+                    }
                     var take = Math.Min(PieceCharacters - pending.Length, line.Length - index);
+                    if (take <= 0)
+                    {
+                        take = MathDelimiters.ContainsOffset(mathRanges, ref rangeIndex, current)
+                            ? Math.Min(line.Length - index, mathRanges[rangeIndex].End - current)
+                            : line.Length - index;
+                    }
+                    take = Math.Min(take, formulaBoundary - current);
+                    var boundary = current + take;
+                    if (MathDelimiters.ContainsOffset(mathRanges, ref rangeIndex, boundary))
+                        take += Math.Min(offset + line.Length, mathRanges[rangeIndex].End) - boundary;
                     if (take > 1 && index + take < line.Length && char.IsHighSurrogate(line[index + take - 1])) take--;
                     pending.Append(line, index, take); index += take;
-                    if (pending.Length >= PieceCharacters - 1) Flush();
+                    if (pending.Length >= PieceCharacters - 1 && !MathDelimiters.ContainsOffset(mathRanges, ref rangeIndex, offset + index)) Flush();
                 }
                 pending.Append('\n'); offset += line.Length + 1;
-                if (pending.Length >= PieceCharacters || pending.Length >= 1200 && string.IsNullOrWhiteSpace(line)) Flush();
+                if ((pending.Length >= PieceCharacters || pending.Length >= 1200 && string.IsNullOrWhiteSpace(line)) &&
+                    !MathDelimiters.ContainsOffset(mathRanges, ref rangeIndex, offset)) Flush();
             }
             Flush();
         }
         else
         {
             var markdown = ParseMarkdown(text);
-            var group = new List<Block>(); var start = 0; var end = 0;
-            void Flush() { if (group.Count == 0) return; pieces.Add(new(start, Math.Max(1, end - start + 1), group.ToArray(), SourcePath: path, MarkdownSource: text)); group.Clear(); }
+            formulas = ReaderFormulaIndex.AffectsNumbering(text) ? ReaderFormulaIndex.FromMarkdown(markdown) : null;
+            var group = new List<Block>();
+            var start = 0;
+            var end = 0;
+            var groupFormulas = 0;
+            void Flush()
+            {
+                if (group.Count == 0) return;
+                pieces.Add(new(start, Math.Max(1, end - start + 1), group.ToArray(), SourcePath: path, MarkdownSource: text));
+                group.Clear();
+                groupFormulas = 0;
+            }
             // Footnote definitions remain at their source locations in the virtualized reader.
             var blocks = markdown.Where(block => block is not LinkReferenceDefinitionGroup and not FootnoteGroup);
             if (markdown.OfType<FootnoteGroup>().FirstOrDefault() is { } notes)
@@ -104,7 +141,9 @@ public static partial class ReaderDocuments
                     pieces.Add(new(block.Span.Start, Math.Max(1, block.Span.Length), [block], SourcePath: path, MarkdownSource: text));
                     continue;
                 }
-                if (group.Count > 0 && block.Span.End - start > PieceCharacters) Flush();
+                var blockFormulas = CountFormulas(block);
+                if (group.Count > 0 && (block.Span.End - start > PieceCharacters ||
+                    groupFormulas + blockFormulas > MathDelimiters.MaxFormulasPerRender)) Flush();
                 if (block is CodeBlock code && (block.Span.Length > PieceCharacters || code.Lines.Count > 80))
                 {
                     Flush(); var content = code.Lines.ToString(); var line = 1;
@@ -129,40 +168,88 @@ public static partial class ReaderDocuments
                     }
                     continue;
                 }
-                if (block is Markdig.Extensions.Tables.Table table && table.Count > 25)
+                if (block is Table table && table.Count > 1 &&
+                    (table.Count > 25 || blockFormulas > MathDelimiters.MaxFormulasPerRender))
                 {
                     Flush();
-                    for (var row = 1; row < table.Count; row += 24)
-                        pieces.Add(new(table[row].Span.Start, Math.Max(1, table[Math.Min(table.Count - 1, row + 23)].Span.End - table[row].Span.Start + 1), [table], First: row, Count: 24, SourcePath: path, MarkdownSource: text));
+                    AddContainerPieces(pieces, table, text, path, first: 1, repeatedFormulas: CountFormulas(table[0]));
                     continue;
                 }
-                if (block is ListBlock list && list.Count > 24)
+                if (block is ListBlock list && (list.Count > 24 || blockFormulas > MathDelimiters.MaxFormulasPerRender))
                 {
                     Flush();
-                    for (var row = 0; row < list.Count; row += 24)
-                        pieces.Add(new(list[row].Span.Start, Math.Max(1, list[Math.Min(list.Count - 1, row + 23)].Span.End - list[row].Span.Start + 1), [list], First: row, Count: 24, SourcePath: path, MarkdownSource: text));
+                    AddContainerPieces(pieces, list, text, path, first: 0, repeatedFormulas: 0);
                     continue;
                 }
-                if (block is ParagraphBlock && block.Span.Length > PieceCharacters * 2)
+                if (block is ParagraphBlock paragraph && (block.Span.Length > PieceCharacters * 2 ||
+                    blockFormulas > MathDelimiters.MaxFormulasPerRender))
                 {
                     Flush(); var raw = text.Substring(block.Span.Start, Math.Min(block.Span.Length, text.Length - block.Span.Start));
+                    var ranges = (paragraph.Inline?.Descendants<MathInline>() ?? [])
+                        .Select(math => (
+                        Start: math.Span.Start - block.Span.Start, End: math.Span.End - block.Span.Start + 1)).ToArray();
+                    var rangeIndex = 0;
                     for (var pos = 0; pos < raw.Length;)
                     {
                         var take = Math.Min(PieceCharacters, raw.Length - pos);
+                        MathDelimiters.ContainsOffset(ranges, ref rangeIndex, pos);
+                        var next = rangeIndex + MathDelimiters.MaxFormulasPerRender;
+                        if (next < ranges.Length) take = Math.Min(take, ranges[next].Start - pos);
+                        if (MathDelimiters.ContainsOffset(ranges, ref rangeIndex, pos + take) &&
+                            ranges[rangeIndex].End - ranges[rangeIndex].Start <= MathDelimiters.MaxFormulaLength + 4)
+                            take = ranges[rangeIndex].End - pos;
                         if (pos + take < raw.Length && char.IsHighSurrogate(raw[pos + take - 1])) take--;
                         var chunk = raw.Substring(pos, take);
-                        pieces.Add(new(block.Span.Start + pos, take, ParseMarkdown(chunk).ToArray(), SourcePath: path, MarkdownSource: chunk)); pos += take;
+                        pieces.Add(new(block.Span.Start + pos, take, ParseMarkdown(chunk).ToArray(), SourcePath: path, MarkdownSource: chunk, MathOffset: block.Span.Start + pos)); pos += take;
                     }
                     continue;
                 }
                 if (group.Count == 0) start = block.Span.Start;
-                group.Add(block); end = block.Span.End;
+                group.Add(block);
+                groupFormulas += blockFormulas;
+                end = block.Span.End;
             }
             Flush();
         }
         if (pieces.Count == 0) pieces.Add(new(0, 0, [], "这是一篇空文档。"));
+        if (formulas is not null)
+            for (var index = 0; index < pieces.Count; index++) pieces[index] = pieces[index] with { Formulas = formulas };
         return new(path, text, encoding, pieces, headings);
     }
+    private static int CountFormulas(Block block) => block switch
+    {
+        MathBlock math => math.ClosingFencedCharCount == 0 ? 0 : 1,
+        LeafBlock leaf => leaf.Inline?.Descendants<MathInline>().Count() ?? 0,
+        ContainerBlock container => container.Sum(CountFormulas),
+        _ => 0
+    };
+
+    private static void AddContainerPieces(List<ReadingPiece> pieces, ContainerBlock container, string text, string path,
+        int first, int repeatedFormulas)
+    {
+        var start = first;
+        var formulas = repeatedFormulas;
+        for (var index = first; index < container.Count; index++)
+        {
+            var count = CountFormulas(container[index]);
+            if (index > start && (index - start == 24 || formulas + count > MathDelimiters.MaxFormulasPerRender))
+            {
+                AddSlice(index);
+                start = index;
+                formulas = repeatedFormulas;
+            }
+            formulas += count;
+        }
+        if (start < container.Count) AddSlice(container.Count);
+
+        void AddSlice(int end)
+        {
+            var offset = container[start].Span.Start;
+            pieces.Add(new(offset, Math.Max(1, container[end - 1].Span.End - offset + 1), [container],
+                First: start, Count: end - start, SourcePath: path, MarkdownSource: text));
+        }
+    }
+
     public static string HeadingAnchor(string title) =>
         Regex.Replace(title.ToLowerInvariant(), @"[^\p{L}\p{N}\s_-]", "").Trim().Replace(' ', '-');
 
@@ -203,31 +290,23 @@ public static partial class ReaderDocuments
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException) { return null; }
     }
-    // Equal-length substitutions preserve source offsets used by reading anchors.
+    // Markdig's fenced math parser handles multiline display delimiters.
+    // Replace only standalone pairs, keeping source offsets and inline TeX intact.
     private static string NormalizeMath(string text)
     {
-        var chars = text.ToCharArray(); var code = false; char fence = '\0'; var ticks = 0;
-        for (var i = 0; i < chars.Length - 1; i++)
+        if (!text.Contains(@"\[", StringComparison.Ordinal)) return text;
+        var ranges = MathDelimiters.FindRanges(text);
+        char[]? normalized = null;
+        foreach (var range in ranges)
         {
-            if (chars[i] is '`' or '~')
-            {
-                var count = 1; while (i + count < chars.Length && chars[i + count] == chars[i]) count++;
-                if (chars[i] == '~' && count < 3) continue;
-                if (!code) { code = true; fence = chars[i]; ticks = count; }
-                else if (chars[i] == fence && count == ticks) code = false;
-                i += count - 1; continue;
-            }
-            if (code || chars[i] != '\\' || (i > 0 && chars[i - 1] == '\\')) continue;
-            if (chars[i + 1] is not ('(' or '[')) continue;
-            var inline = chars[i + 1] == '(';
-            var closing = inline ? "\\)" : "\\]";
-            var end = text.IndexOf(closing, i + 2, StringComparison.Ordinal);
-            while (end > 0 && text[end - 1] == '\\') end = text.IndexOf(closing, end + 2, StringComparison.Ordinal);
-            if (end < 0 || inline && text.AsSpan(i + 2, end - i - 2).Contains('\n')) continue;
-            chars[i] = inline ? ' ' : '$'; chars[i + 1] = '$';
-            chars[end] = '$'; chars[end + 1] = inline ? ' ' : '$'; i = end + 1;
+            if (text[range.Start] != '\\' || text[range.Start + 1] != '[' ||
+                !MathDelimiters.IsStandalone(text, range.Start) || !MathDelimiters.IsStandalone(text, range.End - 2))
+                continue;
+            normalized ??= text.ToCharArray();
+            normalized[range.Start] = normalized[range.Start + 1] = '$';
+            normalized[range.End - 2] = normalized[range.End - 1] = '$';
         }
-        return new string(chars);
+        return normalized is null ? text : new string(normalized);
     }
     [GeneratedRegex(@"^(?:第[〇零一二三四五六七八九十百千万两\d]+[章节卷部篇回集]|序章|序言|前言|楔子|尾声|后记|终章|附录|chapter\s+\d+|part\s+\d+)(?:\s|[、:：.．]|$|[^\x00-\x7F])", RegexOptions.IgnoreCase)]
     private static partial Regex Chapter();

@@ -1,4 +1,4 @@
-using System.Text.RegularExpressions;
+using Reflection.Core;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
@@ -16,10 +16,22 @@ namespace Reflection.Desktop;
 // Markdown uses native document elements. Streaming repaints are throttled.
 public partial class MarkdownText : RichTextBox
 {
+    private CancellationTokenSource? formulaWork;
+    internal int PendingFormulaCount { get; private set; }
+    protected bool FormulaRenderInvalidated { get; private set; }
+
     static MarkdownText()
     {
         // The engine already implements the ring accent as \ocirc; expose its LaTeX name.
         CSharpMath.Atom.LaTeXSettings.CommandSymbols.Add(@"\mathring", new CSharpMath.Atom.Atoms.Accent("\u030A"));
+        var symbols = CSharpMath.Atom.LaTeXSettings.CommandSymbols;
+        symbols.Add(@"\lt", new CSharpMath.Atom.Atoms.Relation("<"));
+        symbols.Add(@"\gt", new CSharpMath.Atom.Atoms.Relation(">"));
+        var delimiters = CSharpMath.Atom.LaTeXSettings.BoundaryDelimiters;
+        delimiters.Add(@"\lt", new CSharpMath.Atom.Boundary("\u2329"));
+        delimiters.Add(@"\gt", new CSharpMath.Atom.Boundary("\u232A"));
+        delimiters.Add(@"\lvert", @"\rvert", new CSharpMath.Atom.Boundary("|"));
+        delimiters.Add(@"\lVert", @"\rVert", new CSharpMath.Atom.Boundary("\u2016"));
     }
     public static readonly DependencyProperty SourceProperty = DependencyProperty.Register(nameof(Source), typeof(string), typeof(MarkdownText), new PropertyMetadata("", Changed));
     public string Source { get => (string)GetValue(SourceProperty); set => SetValue(SourceProperty, value); }
@@ -44,8 +56,8 @@ public partial class MarkdownText : RichTextBox
         SetResourceReference(SelectionBrushProperty, "ToneE2DCCE");
         VerticalScrollBarVisibility = ScrollBarVisibility.Disabled; HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
         Loaded += (_, _) => { ThemeManager.Changed += OnThemeChanged; Render(); };
-        Unloaded += (_, _) => { ThemeManager.Changed -= OnThemeChanged; repaint.Stop(); };
-        IsVisibleChanged += (_, _) => { if (IsVisible) Render(); };
+        Unloaded += (_, _) => { ThemeManager.Changed -= OnThemeChanged; repaint.Stop(); CancelFormulaWork(); };
+        IsVisibleChanged += (_, _) => { if (IsVisible) Render(); else CancelFormulaWork(); };
     }
     private void OnThemeChanged(object? sender, EventArgs e) { rendered = null; if (IsVisible) Render(); }
     private static void Changed(DependencyObject obj, DependencyPropertyChangedEventArgs e)
@@ -95,11 +107,12 @@ public partial class MarkdownText : RichTextBox
 
     internal virtual void Render()
     {
-        if (rendered == Source && renderedTheme == ThemeManager.Revision) return;
+        if (!FormulaRenderInvalidated && rendered == Source && renderedTheme == ThemeManager.Revision) return;
         var document = new FlowDocument { PagePadding = new Thickness(0), FontSize = LayoutFontSize,
             FontFamily = BodyFont, Foreground = Brush("Ink"), LineStackingStrategy = LineStackingStrategy.MaxHeight };
-        ResetLayout(Source);
-        foreach (var block in Reflection.Core.ReaderDocuments.ParseMarkdown(Source)) AddBlock(document.Blocks, block, 0);
+        var parsed = ReaderDocuments.ParseMarkdown(Source);
+        ResetLayout(Source, ReaderFormulaIndex.AffectsNumbering(Source) ? ReaderFormulaIndex.FromMarkdown(parsed) : null);
+        foreach (var block in parsed) AddBlock(document.Blocks, block, 0);
         Document = document; rendered = Source; renderedTheme = ThemeManager.Revision;
     }
 
@@ -110,47 +123,105 @@ public partial class MarkdownText : RichTextBox
         var formula = new Image { Source = image, Width = width, Height = height, Stretch = Stretch.None, Focusable = false, IsHitTestVisible = false, HorizontalAlignment = HorizontalAlignment.Left };
         AutomationProperties.SetName(formula, "LaTeX：" + source); return formula;
     }
-    protected void ResetFormulaBudget() { formulaPixels = 0; FormulaError = ""; }
-    protected Image? Formula(string source, bool block, bool withinBudget, bool displayStyle = false, double fontSize = 14)
+    private void CancelFormulaWork()
     {
-        if (!withinBudget || source.Length > 4096 || source.Length == 0) return null;
-        var key = new FormulaRasterCache.Key(source, block, block || displayStyle, fontSize, ThemeManager.Revision);
-        if (FormulaRasterCache.TryGet(key, out var cached))
+        if (formulaWork is null) return;
+        formulaWork.Cancel();
+        formulaWork.Dispose();
+        formulaWork = null;
+        FormulaRenderInvalidated = PendingFormulaCount > 0;
+        PendingFormulaCount = 0;
+    }
+
+    protected void ResetFormulaBudget()
+    {
+        CancelFormulaWork();
+        FormulaRenderInvalidated = false;
+        formulaPixels = 0;
+        FormulaError = "";
+    }
+
+    protected FrameworkElement? Formula(string source, string raw, bool block, bool withinBudget,
+        bool displayStyle = false, double fontSize = 14, int offset = 0)
+    {
+        source = source.Trim();
+        if (!withinBudget || !FormulaSource.WithinLimits(source)) return null;
+        var display = block || displayStyle;
+        var contextual = FormulaCompatibility.HasReferences(source) || ReaderFormulaIndex.AffectsNumbering(source);
+        var index = contextual ? formulaIndex : null;
+        var key = new FormulaRasterCache.Key(source, block, display, fontSize, ThemeManager.Revision,
+            index?.Id ?? 0, contextual ? offset : 0);
+        if (FormulaRasterCache.TryGet(key, out var cached)) return UseRaster(cached, source);
+        var color = ((SolidColorBrush)Application.Current.FindResource("Ink")).Color;
+        var size = block ? fontSize + 1 : fontSize;
+        var containsHan = FormulaCompatibility.ContainsHan(source);
+        string? error = null;
+        if (!contextual && !containsHan)
         {
-            var cost = (long)(cached.Width * cached.Height * 4);
-            if (formulaPixels + cost > 12_000_000) return null;
-            formulaPixels += cost; return FormulaImage(cached.Image, cached.Width, cached.Height, source);
-        }
-        var depth = 0;
-        foreach (var c in source) { if (c == '{' && ++depth > 64) return null; if (c == '}') depth--; }
-        // Do not accept user macros, external resources, arbitrary dimensions or huge arrays.
-        if (Regex.IsMatch(source, @"\\(?:def|gdef|edef|xdef|newcommand|renewcommand|input|include|includegraphics|href|url|color|textcolor|definecolor|rule|hspace|vspace|kern|mkern|raisebox|resizebox|scalebox)\b") || source.Count(c => c == '&') > 128) return null;
-        try
-        {
-            var painter = new MathPainter
+            try
             {
-                LaTeX = source, FontSize = (float)(block ? fontSize + 1 : fontSize),
-                LineStyle = block || displayStyle ? CSharpMath.Atom.LineStyle.Display : CSharpMath.Atom.LineStyle.Text,
-                TextColor = ToSkiaColor(((SolidColorBrush)Application.Current.FindResource("Ink")).Color), DisplayErrorInline = false
-            };
-            if (painter.ErrorMessage is { Length: > 0 } error) { FormulaError += source + ": " + error + "\n"; return null; }
-            var bounds = painter.Measure();
-            var width = Math.Ceiling(bounds.Width + 6); var height = Math.Ceiling(bounds.Height + 6);
-            if (!double.IsFinite(width) || !double.IsFinite(height) || width < 1 || height < 1 || width > 12000 || height > 1200) return null;
-            // Two device pixels per DIP; bound both a single surface and the whole message.
-            const int scale = 2;
-            var pixels = (long)(width * scale) * (long)(height * scale);
-            if (pixels > 4_000_000 || formulaPixels + pixels > 12_000_000) return null;
-            using var bitmap = new SKBitmap(new SKImageInfo((int)width * scale, (int)height * scale, SKColorType.Bgra8888, SKAlphaType.Premul));
-            using var canvas = new SKCanvas(bitmap);
-            canvas.Clear(SKColors.Transparent); canvas.Scale(scale);
-            painter.Draw(canvas, 3 - bounds.Left, 3 - bounds.Top); canvas.Flush();
-            var image = BitmapSource.Create(bitmap.Width, bitmap.Height, 96 * scale, 96 * scale, PixelFormats.Pbgra32, null, bitmap.GetPixels(), bitmap.ByteCount, bitmap.RowBytes);
-            image.Freeze(); formulaPixels += pixels;
-            FormulaRasterCache.Add(key, new(image, width, height));
-            return FormulaImage(image, width, height, source);
+                var painter = new MathPainter
+                {
+                    LaTeX = FormulaSource.ForCSharpMath(source), FontSize = (float)size,
+                    LineStyle = display ? CSharpMath.Atom.LineStyle.Display : CSharpMath.Atom.LineStyle.Text,
+                    TextColor = ToSkiaColor(color), DisplayErrorInline = false
+                };
+                error = painter.ErrorMessage;
+                if (string.IsNullOrEmpty(error))
+                {
+                    var bounds = painter.Measure();
+                    var width = Math.Ceiling(bounds.Width + 6);
+                    var height = Math.Ceiling(bounds.Height + 6);
+                    if (!FormulaSource.ValidSurface(width, height) || formulaPixels + width * height * 4 > 12_000_000) return null;
+                    var raster = FormulaSource.Rasterize(width, height,
+                        canvas => painter.Draw(canvas, 3 - bounds.Left, 3 - bounds.Top));
+                    FormulaRasterCache.Add(key, raster);
+                    return UseRaster(raster, source);
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException) { error = ex.Message; }
         }
-        catch (Exception ex) when (ex is not OutOfMemoryException) { FormulaError += ex.Message + "\n"; return null; }
+        if (!contextual && !containsHan && !FormulaCompatibility.Supports(source))
+        {
+            FormulaError += source + ": " + error + "\n";
+            return null;
+        }
+
+        // Keep the original text visible while the offline renderer works.
+        var host = new ContentControl
+        {
+            Focusable = false,
+            Content = new TextBlock { Text = raw, TextWrapping = TextWrapping.Wrap }
+        };
+        var token = (formulaWork ??= new CancellationTokenSource()).Token;
+        PendingFormulaCount++;
+        _ = CompleteFormulaAsync(host, key, source, display, size, color, index, offset, token);
+        return host;
+    }
+
+    private Image? UseRaster(FormulaRasterCache.Raster raster, string source)
+    {
+        if (formulaPixels + raster.Pixels > 12_000_000) return null;
+        formulaPixels += raster.Pixels;
+        return FormulaImage(raster.Image, raster.Width, raster.Height, source);
+    }
+
+    private async Task CompleteFormulaAsync(ContentControl host, FormulaRasterCache.Key key, string source, bool display,
+        double size, Color color, ReaderFormulaIndex? index, int offset, CancellationToken token)
+    {
+        var (raster, error) = await FormulaCompatibility.RenderAsync(source, display, size, color, index, offset, token);
+        if (token.IsCancellationRequested) return;
+        PendingFormulaCount--;
+        if (raster is not null && UseRaster(raster, source) is { } image)
+        {
+            FormulaRasterCache.Add(key, raster);
+            host.Content = image;
+        }
+        else
+        {
+            FormulaFallbackCount++;
+            if (error is not null) FormulaError += source + ": " + error + "\n";
+        }
     }
 }
 

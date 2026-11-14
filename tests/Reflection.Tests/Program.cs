@@ -37,6 +37,59 @@ await Test("OpenAI discovery and /v1 normalization", async () =>
     using var client = new InferenceClient(new Stub(r => { Check(r.RequestUri!.AbsolutePath == "/v1/models"); return Task.FromResult(Json("{\"data\":[{\"id\":\"local-model\"}]}")); }));
     var result = await client.DiscoverAsync(OpenAI(), default); Check(result.Online && result.Models[0].Model == "local-model");
 });
+await Test("llama.cpp router uses the selected model's advertised reasoning levels", async () =>
+{
+    const string modelId = "provider/model:Q4";
+    var model = new ModelOption(OpenAI(), modelId);
+    var runnerAvailable = false;
+    using var client = new InferenceClient(new Stub(async request =>
+    {
+        var uri = request.RequestUri!;
+        if (request.Method == HttpMethod.Get)
+        {
+            Check(uri.AbsolutePath == "/props");
+            if (uri.Query.Length == 0) return Json("""{"role":"router","default_generation_settings":{"n_ctx":0}}""");
+            Check(uri.Query == "?model=provider%2Fmodel%3AQ4&autoload=false");
+            return runnerAvailable
+                ? Json("""{"default_generation_settings":{"n_ctx":4096},"chat_template_caps":{"supports_reasoning_effort":true,"reasoning_effort_levels":["low","medium","xhigh"]}}""")
+                : new HttpResponseMessage(HttpStatusCode.BadRequest);
+        }
+        Check(uri.AbsolutePath == "/v1/chat/completions");
+        using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
+        Check(body.RootElement.GetProperty("model").GetString() == modelId);
+        if (runnerAvailable) Check(body.RootElement.GetProperty("reasoning_effort").GetString() == "xhigh");
+        else Check(!body.RootElement.TryGetProperty("reasoning_effort", out _));
+        return Stream("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n");
+    }));
+    var settings = new AppSettings { Reason = "high" };
+    var messages = new ChatMessage[] { new() { Content = "hello" } };
+
+    model.Info.CopyFrom(await client.InspectAsync(model, default));
+    Check(!model.Info.Inspected && model.Info.ReasoningEffortLevels is { Length: 0 });
+    await foreach (var _ in client.StreamAsync(model, messages, "", settings, default, model.Info)) { }
+
+    runnerAvailable = true;
+    model.Info.CopyFrom(await client.InspectAsync(model, default));
+    Check(model.Info.Inspected && model.Info.ContextLimit == "4096");
+    await foreach (var _ in client.StreamAsync(model, messages, "", settings, default, model.Info)) { }
+
+    settings.Reason = "medium";
+    using var medium = JsonDocument.Parse(InferenceClient.CreateBody(model, messages, "", settings));
+    Check(medium.RootElement.GetProperty("reasoning_effort").GetString() == "medium");
+    settings.Reason = "off";
+    using var off = JsonDocument.Parse(InferenceClient.CreateBody(model, messages, "", settings));
+    Check(!off.RootElement.TryGetProperty("reasoning_effort", out _));
+});
+await Test("OpenAI models without advertised reasoning support omit the parameter", () =>
+{
+    using var props = JsonDocument.Parse("""{"chat_template_caps":{"supports_reasoning_effort":false}}""");
+    var model = new ModelOption(OpenAI(), "test");
+    Prompting.ReadProps(props.RootElement, model.Info);
+    using var body = JsonDocument.Parse(InferenceClient.CreateBody(model, [new() { Content = "hello" }], "",
+        new() { Reason = "high" }));
+    Check(!body.RootElement.TryGetProperty("reasoning_effort", out _));
+    return Task.CompletedTask;
+});
 await Test("Unavailable service", async () => { using var c = new InferenceClient(new Stub(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)))); Check(!(await c.DiscoverAsync(new(), default)).Online); });
 await Test("Invalid model payload", async () => { using var c = new InferenceClient(new Stub(_ => Task.FromResult(Json("{}")))); Check(!(await c.DiscoverAsync(new(), default)).Online); });
 await Test("Loopback-only addresses", async () =>
@@ -609,6 +662,50 @@ await Test("Native diagram subset rejects includes, unsupported directives and o
     Check(MarkdownDiagrams.Parse("flowchart TD\nA --> B\n" + new string('x', 6000), "mermaid") is null);
     return Task.CompletedTask;
 });
+await Test("Reader shares explicit math boundaries and keeps cross-piece formulas intact", () =>
+{
+    const string explicitMath = @"$2π$ $2α$ $x$2 \( x+y \) \[ x+y \] $$ x+y $$";
+    Check(ReaderDocuments.ParseMarkdown(explicitMath).Descendants<MathInline>().Count() == 6);
+    Check(MessageMarkupTokenizer.Tokenize(explicitMath).Count(token =>
+        token.Kind is MarkupKind.InlineMath or MarkupKind.DisplayMath) == 6);
+    var dense = string.Join(" ", Enumerable.Repeat("$x$", MathDelimiters.MaxFormulasPerRender + 1));
+    var denseText = ReaderDocuments.Parse("dense.txt", dense);
+    Check(denseText.Pieces.Count == 2 && string.Concat(denseText.Pieces.Select(piece => piece.Text)).TrimEnd('\n') == dense);
+    var denseMarkdown = ReaderDocuments.Parse("dense.md", dense);
+    Check(denseMarkdown.Pieces.Count == 2 && denseMarkdown.Pieces[1].MathOffset == denseMarkdown.Pieces[1].Offset);
+    const string chineseUnit = @"$2\text{米}$，另有价格 $5 和 $10。";
+    Check(ReaderDocuments.ParseMarkdown(chineseUnit).Descendants<MathInline>().Single().Content.ToString() == @"2\text{米}");
+    Check(MessageMarkupTokenizer.Tokenize(chineseUnit).Single(token => token.Kind == MarkupKind.InlineMath).Text == @"2\text{米}");
+    const string currency = "价格 $5 和 $10；$10.20 与 $20.50。";
+    Check(!ReaderDocuments.ParseMarkdown(currency).Descendants<MathInline>().Any());
+    Check(!MessageMarkupTokenizer.Tokenize(currency).Any(token =>
+        token.Kind is MarkupKind.InlineMath or MarkupKind.DisplayMath));
+
+    var source = new string('a', ReaderDocuments.PieceCharacters - 2) + " $x+1$ " +
+        new string('b', ReaderDocuments.PieceCharacters + 10);
+    var md = ReaderDocuments.Parse("boundary.md", source);
+    var txt = ReaderDocuments.Parse("boundary.txt", source);
+    Check(md.Pieces.SelectMany(piece => piece.Blocks).OfType<ParagraphBlock>().SelectMany(block => block.Inline?.Descendants<MathInline>() ?? [])
+        .Single().Content.ToString() == "x+1");
+    Check(txt.Pieces.SelectMany(piece => MessageMarkupTokenizer.Tokenize(piece.Text!, recognizeTables: false))
+        .Single(token => token.Kind == MarkupKind.InlineMath).Text == "x+1");
+    Check(string.Concat(txt.Pieces.Select(piece => piece.Text)).TrimEnd('\n') == source);
+
+    var document = ReaderDocuments.Parse("numbers.md", @"前向 \eqref{eq:a}
+
+\begin{align}
+a&=b\label{eq:a}\\
+c&=d
+\end{align}
+
+```tex
+\begin{equation}x=1\label{ignored}\end{equation}
+```");
+    var formula = document.Pieces.First().Formulas!.Entries.Single();
+    Check(formula.Source.Contains(@"\label{eq:a}") && formula.Display &&
+        document.Text.AsSpan(formula.Offset).StartsWith(@"\begin{align}"));
+    return Task.CompletedTask;
+});
 await Test("Reader math accepts Chinese adjacency and nested list formulas", () =>
 {
     var doc = ReaderDocuments.Parse("limits.md", "1. 唯一性：$f$在点$p$的极限存在。\n2. 对任意正数$\\varepsilon$，总有点$p$的邻域$\\mathring N_\\varepsilon(q)$。\n   - 设$\\lim f(x)=A,\\lim g(x)=B$，其中$k,l$为常数。\n   - $\\frac{f(x)}{g(x)}$为商。\n\n金额 $5 和 $10；转义 \\$x\\$；`$code$`。\n");
@@ -684,4 +781,3 @@ sealed class FragmentStream(byte[] bytes) : MemoryStream(bytes)
 {
     public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default) => base.ReadAsync(buffer[..Math.Min(buffer.Length, 3)], ct);
 }
-

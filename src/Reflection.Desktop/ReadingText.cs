@@ -61,15 +61,15 @@ public sealed class ReadingText : MarkdownText
         var piece = Piece;
         var style = (TextSize, Leading, Serif, ThemeManager.Revision);
         if (piece is null) { StopImages(); return; }
-        if (ReferenceEquals(piece, renderedPiece) && style == renderedStyle) return;
+        if (!FormulaRenderInvalidated && ReferenceEquals(piece, renderedPiece) && style == renderedStyle) return;
         StopImages(); localImages.Clear();
-        renderedPiece = piece; renderedStyle = style; ResetLayout(piece.MarkdownSource);
+        renderedPiece = piece; renderedStyle = style; ResetLayout(piece.MarkdownSource, piece.Formulas);
         var doc = new FlowDocument { PagePadding = new Thickness(0), FontSize = TextSize,
             FontFamily = BodyFont, Foreground = Brush("Ink"),
             LineHeight = TextSize * Leading, LineStackingStrategy = LineStackingStrategy.MaxHeight };
         if (piece.Text is { } text)
         {
-            if (!piece.Code && piece.Heading == 0) AddPlainText(doc, text.TrimEnd('\r', '\n'));
+            if (!piece.Code && piece.Heading == 0) AddPlainText(doc, text.TrimEnd('\r', '\n'), piece.Offset);
             else if (piece.Code) AddCode(doc.Blocks, text.EndsWith('\n') ? text[..^1].TrimEnd('\r') : text, piece.CodeLanguage, piece.CodeLine, allowDiagram: false);
             else
             {
@@ -87,15 +87,17 @@ public sealed class ReadingText : MarkdownText
         Document = doc;
         StartImages();
     }
-    private void AddPlainText(FlowDocument doc, string text)
+    private void AddPlainText(FlowDocument doc, string text, int offset)
     {
         Paragraph? paragraph = null;
         Paragraph Current() { if (paragraph is null) { paragraph = new Paragraph { Margin = new Thickness(0, 0, 0, 12) }; doc.Blocks.Add(paragraph); } return paragraph; }
         foreach (var token in MessageMarkupTokenizer.Tokenize(text, recognizeTables: false))
         {
+            var start = offset;
+            offset += token.Raw.Length;
             if (token.Kind is not (MarkupKind.InlineMath or MarkupKind.DisplayMath)) { Current().Inlines.Add(new Run(token.Raw)); continue; }
             var block = token.Kind == MarkupKind.DisplayMath;
-            var image = Formula(token.Text, block, ++FormulaCount <= 64, fontSize: TextSize);
+            var image = Formula(token.Text, token.Raw, block, ++FormulaCount <= MathDelimiters.MaxFormulasPerRender, fontSize: TextSize, offset: start);
             if (image is null) { FormulaFallbackCount++; Current().Inlines.Add(new Run(token.Raw)); continue; }
             var scroll = FormulaScroller(image, block);
             if (block) { paragraph = null; doc.Blocks.Add(new BlockUIContainer(scroll)); }

@@ -35,10 +35,13 @@ public sealed class ModelInfo
     public string ContextLimit { get; set; } = "";
     public bool Inspected { get; set; }
     public bool CapsChecked { get; set; }
+    // Null means the server did not advertise levels; an empty list omits the field.
+    public string[]? ReasoningEffortLevels { get; set; }
     public void CopyFrom(ModelInfo other)
     {
         SystemPrompt = other.SystemPrompt; Defaults = new(other.Defaults); Capabilities = [.. other.Capabilities];
         ContextLimit = other.ContextLimit; Inspected = other.Inspected; CapsChecked = other.CapsChecked;
+        ReasoningEffortLevels = other.ReasoningEffortLevels is { } levels ? [.. levels] : null;
     }
 }
 public sealed record ModelOption(ServiceConfig Service, string Model)

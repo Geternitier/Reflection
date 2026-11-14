@@ -31,6 +31,21 @@ public static class Prompting
 
     public static string NormalizeReason(string? value) => value is "low" or "medium" or "high" ? value : "off";
 
+    internal static string? OpenAiReasoningEffort(string reason, ModelInfo info)
+    {
+        if (reason == "off") return null;
+        var levels = info.ReasoningEffortLevels;
+        if (levels is null) return reason;
+        if (levels.Length == 0) return null;
+        if (levels.Contains(reason, StringComparer.Ordinal)) return reason;
+        return reason switch
+        {
+            "low" => levels[0],
+            "high" => levels[^1],
+            _ => levels[(levels.Length - 1) / 2]
+        };
+    }
+
     public static string ShownDefault(ParamField field, ModelInfo? info)
     {
         if (info?.Defaults.TryGetValue(field.Key, out var own) == true && !string.IsNullOrWhiteSpace(own))
@@ -218,6 +233,17 @@ public static class Prompting
             }
             if (settings.TryGetProperty("n_ctx", out var ctx) && ctx.TryGetDouble(out var length) && length > 0)
                 info.ContextLimit = ((int)length).ToString(CultureInfo.InvariantCulture);
+        }
+        if (root.TryGetProperty("chat_template_caps", out var caps) && caps.ValueKind == JsonValueKind.Object)
+        {
+            if (caps.TryGetProperty("supports_reasoning_effort", out var supported) && supported.ValueKind == JsonValueKind.False)
+                info.ReasoningEffortLevels = [];
+            else if (caps.TryGetProperty("reasoning_effort_levels", out var levels) && levels.ValueKind == JsonValueKind.Array)
+                info.ReasoningEffortLevels = levels.EnumerateArray()
+                    .Where(level => level.ValueKind == JsonValueKind.String)
+                    .Select(level => level.GetString()!.Trim())
+                    .Where(level => level.Length > 0)
+                    .Distinct(StringComparer.Ordinal).ToArray();
         }
         info.Inspected = true;
     }

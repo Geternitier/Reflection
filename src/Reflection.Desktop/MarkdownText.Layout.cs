@@ -24,6 +24,7 @@ public partial class MarkdownText
     private (double Digit, double Period)? markerWidths;
     private int tableColumns;
     private string? markdownSource;
+    private ReaderFormulaIndex? formulaIndex;
     private readonly Dictionary<string, Paragraph> headings = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<Footnote, Paragraph> footnoteTargets = [];
     private readonly Dictionary<Footnote, Hyperlink> footnoteReferences = [];
@@ -33,9 +34,10 @@ public partial class MarkdownText
     protected virtual double LayoutLeading => 1.5;
     protected virtual ReadingPiece? RenderPiece => null;
 
-    protected void ResetLayout(string? source = null)
+    protected void ResetLayout(string? source = null, ReaderFormulaIndex? formulas = null)
     {
         markdownSource = source;
+        formulaIndex = formulas;
         headings.Clear();
         footnoteTargets.Clear();
         footnoteReferences.Clear();
@@ -95,7 +97,7 @@ public partial class MarkdownText
         return string.IsNullOrWhiteSpace(alt) ? "[图片]" : $"[图片：{alt}]";
     }
 
-    protected ScrollViewer FormulaScroller(Image image, bool block)
+    protected ScrollViewer FormulaScroller(FrameworkElement image, bool block)
     {
         var scroll = new ScrollViewer { Content = image, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
             VerticalScrollBarVisibility = block ? ScrollBarVisibility.Auto : ScrollBarVisibility.Disabled, MaxHeight = block ? 600 : double.PositiveInfinity, Padding = block ? new Thickness(0, 10, 0, 12) : new Thickness(0) };
@@ -165,7 +167,10 @@ public partial class MarkdownText
         if (depth > 24) { target.Add(new Paragraph(new Run("内容嵌套过深"))); return; }
         if (node is MathBlock math)
         {
-            AddDisplayMath(target, math, math.Lines.ToString());
+            if (math.ClosingFencedCharCount == 0)
+                target.Add(new Paragraph(new Run(MathSource(math, "$$" + math.Lines))));
+            else
+                AddDisplayMath(target, math, math.Lines.ToString());
             return;
         }
         if (node is ParagraphBlock { Inline: { } content } && content.FirstChild is MathInline { DelimiterCount: 2 } display
@@ -257,8 +262,10 @@ public partial class MarkdownText
     }
     private void AddDisplayMath(BlockCollection target, MarkdownObject node, string source)
     {
-        var image = Formula(source, true, ++FormulaCount <= 64, fontSize: LayoutFontSize);
-        if (image is null) { FormulaFallbackCount++; target.Add(new Paragraph(new Run(MathSource(node, "$$" + source + "$$")))); }
+        var raw = MathSource(node, "$$" + source + "$$");
+        var image = Formula(source, raw, true, ++FormulaCount <= MathDelimiters.MaxFormulasPerRender, fontSize: LayoutFontSize,
+            offset: node.Span.Start + (RenderPiece?.MathOffset ?? 0));
+        if (image is null) { FormulaFallbackCount++; target.Add(new Paragraph(new Run(raw))); }
         else target.Add(new BlockUIContainer(FormulaScroller(image, true)));
     }
 
@@ -274,8 +281,10 @@ public partial class MarkdownText
                 case CodeInline code: target.Add(new Run(code.Content) { FontFamily = new FontFamily("Consolas"), FontSize = LayoutFontSize * .88, Background = Brush("AccentSoft") }); break;
                 case LineBreakInline: target.Add(new LineBreak()); break;
                 case MathInline math:
-                    var formula = Formula(math.Content.ToString(), math.DelimiterCount > 1, ++FormulaCount <= 64, displayStyle: InTable, fontSize: LayoutFontSize);
-                    if (formula is null) { FormulaFallbackCount++; target.Add(new Run(MathSource(math, "$" + math.Content + "$"))); }
+                    var raw = MathSource(math, "$" + math.Content + "$");
+                    var formula = Formula(math.Content.ToString(), raw, math.DelimiterCount > 1, ++FormulaCount <= MathDelimiters.MaxFormulasPerRender,
+                        displayStyle: InTable, fontSize: LayoutFontSize, offset: math.Span.Start + (RenderPiece?.MathOffset ?? 0));
+                    if (formula is null) { FormulaFallbackCount++; target.Add(new Run(raw)); }
                     else
                     {
                         target.Add(new InlineUIContainer(FormulaScroller(formula, false)) { BaselineAlignment = BaselineAlignment.Center });
