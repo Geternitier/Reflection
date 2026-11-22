@@ -234,7 +234,7 @@ public partial class MainWindow : Window
         CharacterEditor.Visibility = name == "editor" ? Visibility.Visible : Visibility.Collapsed;
         ComposerDropHint.Visibility = Visibility.Collapsed;
         currentPage = name;
-        if (name == "chat") PageLabel.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding("Current.Title"));
+        if (name == "chat") PageLabel.SetBinding(TextBlock.TextProperty, new System.Windows.Data.Binding("Current.DisplayTitle"));
         else { System.Windows.Data.BindingOperations.ClearBinding(PageLabel, TextBlock.TextProperty); PageLabel.Text = name switch { "cards" => "角色", "reader" => "阅读", "detail" => VM.DetailCard?.Name ?? "角色详情", "editor" => CharacterEditor.Original is null ? "创建角色" : "编辑角色", _ => "设置" }; }
         PageLabel.Visibility = Visibility.Visible;
         CardsHeaderActions.Visibility = name == "cards" ? Visibility.Visible : Visibility.Collapsed;
@@ -278,10 +278,14 @@ public partial class MainWindow : Window
     {
         if (HistoryList.SelectedItem is ConversationSummary item) await Run(async () => { followOutput = true; await VM.OpenAsync(item); ShowPage("chat"); });
     }
-    private async void Send_Click(object sender, RoutedEventArgs e) => await Run(async () => { followOutput = true; await VM.SendAsync(); });
+    private async void Send_Click(object sender, RoutedEventArgs e) => await Run(async () =>
+    {
+        SmoothScroll.Stop(MessagesList); followOutput = true;
+        await VM.SendAsync();
+    });
     private async void Regenerate_Click(object sender, RoutedEventArgs e) { if (VM.Idle) await Run(() => VM.SendAsync(true)); }
     private async void Continue_Click(object sender, RoutedEventArgs e) { if (VM.Idle || VM.Busy) await Run(VM.ContinueAsync); }
-    private async void Help_Click(object sender, RoutedEventArgs e) => await Run(async () => { followOutput = false; await VM.HelpDraftAsync(); Composer.Focus(); Composer.CaretIndex = Composer.Text.Length; });
+    private async void Help_Click(object sender, RoutedEventArgs e) => await Run(async () => { await VM.HelpDraftAsync(); Composer.Focus(); Composer.CaretIndex = Composer.Text.Length; });
     private void Composer_KeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Down && Keyboard.Modifiers == ModifierKeys.None && Composer.SelectionLength == 0)
@@ -309,12 +313,6 @@ public partial class MainWindow : Window
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException or InvalidOperationException or System.Runtime.InteropServices.COMException) { VM.Status = ex.Message; }
     }
-    private void Messages_ScrollChanged(object sender, ScrollChangedEventArgs e)
-    {
-        if (AutoScrollActive) { followOutput = false; return; }
-        if (e.OriginalSource is ScrollViewer scroll && e.ExtentHeightChange == 0 && e.VerticalChange != 0)
-            followOutput = scroll.VerticalOffset >= scroll.ScrollableHeight - 48;
-    }
     private async void CopyMessage_Click(object sender, RoutedEventArgs e) => await Run(() => { if (((FrameworkElement)sender).DataContext is ChatMessage msg) { Clipboard.SetText(msg.Content); VM.Status = "消息已复制"; } return Task.CompletedTask; });
     private async void EditMessage_Click(object sender, RoutedEventArgs e)
     {
@@ -325,7 +323,7 @@ public partial class MainWindow : Window
     private void BeginTitleEdit(object sender, RoutedEventArgs e)
     {
         if (!VM.Idle) return;
-        titleBeforeEdit = VM.Current.Title; TitleBox.Text = titleBeforeEdit; TitleBox.Visibility = Visibility.Visible; TitleButton.Visibility = Visibility.Collapsed; TitleBox.Focus(); TitleBox.SelectAll();
+        titleBeforeEdit = VM.Current.DisplayTitle; TitleBox.Text = titleBeforeEdit; TitleBox.Visibility = Visibility.Visible; TitleButton.Visibility = Visibility.Collapsed; TitleBox.Focus(); TitleBox.SelectAll();
     }
     private async void TitleBox_KeyDown(object sender, KeyEventArgs e)
     {
@@ -337,8 +335,9 @@ public partial class MainWindow : Window
     {
         var title = TitleBox.Text.Trim();
         EndTitleEdit(false);
-        if (title.Length == 0 || title == VM.Current.Title) return;
-        VM.Current.Title = title; await Run(VM.SaveCurrentAsync);
+        if (title.Length == 0 || title == titleBeforeEdit) return;
+        var id = VM.Current.Id;
+        await Run(() => VM.RenameAsync(id, title));
     }
     private void EndTitleEdit(bool _) { TitleBox.Visibility = Visibility.Collapsed; TitleButton.Visibility = Visibility.Visible; }
     private void RenameHistory_Down(object sender, MouseButtonEventArgs e)
@@ -349,15 +348,16 @@ public partial class MainWindow : Window
         foreach (var item in VM.Conversations) item.Renaming = item == summary;
         Dispatcher.BeginInvoke(() =>
         {
+            if (!summary.Renaming) return;
             if (HistoryList.ItemContainerGenerator.ContainerFromItem(summary) is not ListBoxItem container) return;
             var box = FindChild<TextBox>(container); if (box is null) return;
-            box.Tag = summary.Title; box.Focus(); box.SelectAll();
+            box.Text = summary.DisplayTitle; box.Focus(); box.SelectAll();
         });
     }
     private async void RenameBox_KeyDown(object sender, KeyEventArgs e)
     {
         var box = (TextBox)sender; var summary = (ConversationSummary)box.DataContext;
-        if (e.Key == Key.Escape) { summary.Title = box.Tag as string ?? summary.Title; summary.Renaming = false; e.Handled = true; return; }
+        if (e.Key == Key.Escape) { summary.Renaming = false; e.Handled = true; return; }
         if (e.Key != Key.Enter) return;
         e.Handled = true; await CommitHistoryRename(box, summary);
     }
@@ -369,8 +369,9 @@ public partial class MainWindow : Window
     private async Task CommitHistoryRename(TextBox box, ConversationSummary summary)
     {
         summary.Renaming = false;
-        if (string.IsNullOrWhiteSpace(summary.Title)) summary.Title = box.Tag as string ?? summary.Title;
-        await Run(() => VM.RenameAsync(summary));
+        var title = box.Text.Trim();
+        if (title.Length == 0 || title == summary.DisplayTitle) return;
+        await Run(() => VM.RenameAsync(summary.Id, title));
     }
     private async void DeleteHistory_Down(object sender, MouseButtonEventArgs e)
     {

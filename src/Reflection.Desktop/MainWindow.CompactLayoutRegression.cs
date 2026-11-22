@@ -2,6 +2,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Input;
 using Reflection.Core;
@@ -45,7 +46,7 @@ public partial class MainWindow
         if (down.Handled || Composer.CaretIndex != 1) throw new InvalidOperationException("Down navigation was intercepted above the last line");
         VM.Draft = "";
         await VM.NewChatAsync(); VM.Current.Title = "紧凑列表验证";
-        var shortUserMessage = new ChatMessage { Role = "user", Content = "好" };
+        var shortUserMessage = new ChatMessage { Role = "user", Content = "你好！你是?" };
         var longUserMessage = new ChatMessage { Role = "user", Content = new string('长', 72) };
         VM.Current.Messages.Add(shortUserMessage);
         VM.Current.Messages.Add(longUserMessage);
@@ -62,8 +63,13 @@ public partial class MainWindow
             throw new InvalidOperationException("User actions did not remain hidden at the right edge");
         var bubble = Descendants<Border>(MessagesList).Single(b => b.Name == "Bubble" && ReferenceEquals(b.DataContext, shortUserMessage));
         var wideBubble = Descendants<Border>(MessagesList).Single(b => b.Name == "Bubble" && ReferenceEquals(b.DataContext, longUserMessage));
-        if (bubble.ActualWidth is < 40 or > 96 || wideBubble.ActualWidth < 480)
+        if (bubble.ActualWidth is < 60 or > 165 || wideBubble.ActualWidth < 480)
             throw new InvalidOperationException($"User message bubbles did not size to their text: short {bubble.ActualWidth}, long {wideBubble.ActualWidth}");
+        var shortText = Descendants<MarkdownText>(bubble).Single();
+        var first = shortText.Document.ContentStart.GetNextInsertionPosition(LogicalDirection.Forward)!;
+        var last = shortText.Document.ContentEnd.GetNextInsertionPosition(LogicalDirection.Backward)!;
+        if (Math.Abs(first.GetCharacterRect(LogicalDirection.Forward).Y - last.GetCharacterRect(LogicalDirection.Backward).Y) > 1)
+            throw new InvalidOperationException($"Short Chinese message wrapped (bubble {bubble.ActualWidth}, text {shortText.ActualWidth}, content {shortText.Document.FontFamily}/{shortText.Document.FontSize}).");
         var area = (FrameworkElement)VisualTreeHelper.GetParent(bubble);
         if (userActions.TransformToAncestor(area).Transform(new Point()).Y < bubble.ActualHeight)
             throw new InvalidOperationException("User actions covered the message body");

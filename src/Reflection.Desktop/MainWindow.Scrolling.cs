@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -18,6 +19,7 @@ public partial class MainWindow
     private Point autoScrollOrigin;
     private Cursor? priorAutoCursor;
     internal bool AutoScrollActive => autoScrollViewer is not null;
+    private const double BottomTolerance = 1;
     private bool followPending;
     private void RequestChatFollow()
     {
@@ -26,8 +28,31 @@ public partial class MainWindow
         Dispatcher.InvokeAsync(() =>
         {
             followPending = false;
-            if (ChatPage.IsVisible && followOutput && VM.Current.Messages.Count > 0) MessagesList.ScrollIntoView(VM.Current.Messages.Last());
+            if (MessagesList.IsVisible && followOutput && SmoothScroll.Viewer(MessagesList) is { } viewer
+                && viewer.ScrollableHeight - viewer.VerticalOffset > BottomTolerance)
+                viewer.ScrollToBottom();
         }, DispatcherPriority.Background);
+    }
+
+    private void Messages_ScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        // Nested text and formula viewers also raise ScrollChanged. Only the message viewport can follow.
+        if (!MessagesList.IsVisible || e.OriginalSource is not ScrollViewer viewer
+            || !ReferenceEquals(viewer.TemplatedParent, MessagesList) || autoScrollSurface == MessagesList) return;
+        var atBottom = viewer.ScrollableHeight - viewer.VerticalOffset <= BottomTolerance;
+        if (followOutput)
+        {
+            if (!atBottom) RequestChatFollow();
+        }
+        else if (atBottom && e.VerticalChange > 0 && e.ExtentHeightChange == 0 && e.ViewportHeightChange == 0)
+            followOutput = true;
+    }
+
+    private void Messages_ScrollBarScroll(object sender, ScrollEventArgs e)
+    {
+        if (e.OriginalSource is ScrollBar { Orientation: Orientation.Vertical, TemplatedParent: ScrollViewer viewer }
+            && ReferenceEquals(viewer.TemplatedParent, MessagesList))
+            followOutput = viewer.ScrollableHeight - e.NewValue <= BottomTolerance;
     }
 
     private void InitializeScrolling()
@@ -36,10 +61,30 @@ public partial class MainWindow
         PreviewMouseWheel += (_, _) => StopAutoScroll();
         Deactivated += (_, _) => StopAutoScroll();
         Closed += (_, _) => StopAutoScroll();
+        MessagesList.IsVisibleChanged += (_, _) => RequestChatFollow();
+        MessagesList.AddHandler(ScrollBar.ScrollEvent, new ScrollEventHandler(Messages_ScrollBarScroll), true);
+        MessagesList.AddHandler(Mouse.PreviewMouseWheelEvent, new MouseWheelEventHandler((_, e) =>
+        {
+            if (e.Delta > 0 && e.Handled && (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) == 0
+                && SmoothScroll.Viewer(MessagesList) is { ScrollableHeight: > 0 }) followOutput = false;
+        }), true);
+        MessagesList.PreviewKeyDown += (_, e) =>
+        {
+            if ((e.Key == Key.PageUp && Keyboard.Modifiers == ModifierKeys.None
+                || e.Key == Key.Home && Keyboard.Modifiers == ModifierKeys.Control)
+                && SmoothScroll.Viewer(MessagesList) is { ScrollableHeight: > 0 }) followOutput = false;
+        };
         ReaderPage.DocumentList.PreviewMouseDown += Messages_MouseDown;
         VM.PropertyChanged += WorkspacePropertyChanged;
     }
-    private void WorkspacePropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) { if (e.PropertyName == nameof(VM.Current)) StopAutoScroll(); }
+    private void WorkspacePropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(VM.Current)) return;
+        StopAutoScroll();
+        SmoothScroll.Stop(MessagesList);
+        followOutput = true;
+        RequestChatFollow();
+    }
     private void Messages_MouseDown(object sender, MouseButtonEventArgs e)
     {
         if (e.ChangedButton != MouseButton.Middle || OverlayOpen || ChoiceOpen) return;
@@ -94,6 +139,6 @@ public partial class MainWindow
         var surface = autoScrollSurface; autoScrollSurface = null;
         autoScrollViewer = null; AutoScrollLayer.Visibility = Visibility.Collapsed;
         Mouse.OverrideCursor = priorAutoCursor; priorAutoCursor = null;
-        if (surface == MessagesList) followOutput = viewer.VerticalOffset >= viewer.ScrollableHeight - 48;
+        if (surface == MessagesList) followOutput = viewer.ScrollableHeight - viewer.VerticalOffset <= BottomTolerance;
     }
 }

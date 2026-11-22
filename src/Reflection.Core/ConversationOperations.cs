@@ -27,7 +27,7 @@ public static class ConversationOperations
 
     public static Conversation Snapshot(Conversation chat) => new()
     {
-        Id = chat.Id, Title = chat.Title, CharacterId = chat.CharacterId, CharacterSnapshot = Snapshot(chat.CharacterSnapshot),
+        Id = chat.Id, Title = chat.Title, HasCustomTitle = chat.HasCustomTitle, CharacterId = chat.CharacterId, CharacterSnapshot = Snapshot(chat.CharacterSnapshot),
         ServiceId = chat.ServiceId, Model = chat.Model, ContextWindowOverride = chat.ContextWindowOverride, UpdatedAt = chat.UpdatedAt, Draft = chat.Draft,
         Attachments = new(chat.Attachments.Select(x => x.Snapshot())),
         Messages = new(chat.Messages.Select(x => new ChatMessage

@@ -99,10 +99,19 @@ public sealed class ChatMessage : Observable
 public sealed class Conversation : Observable
 {
     public Guid Id { get; set; } = Guid.NewGuid();
-    private string title = "新的对话";
-    public string Title { get => title; set => Set(ref title, value); }
+    public const string DefaultTitle = "新的对话";
+    private string title = DefaultTitle;
+    public string Title { get => title; set { if (Set(ref title, value)) Raise(nameof(DisplayTitle)); } }
+    private bool? hasCustomTitle;
+    public bool? HasCustomTitle { get => hasCustomTitle; set { if (Set(ref hasCustomTitle, value)) Raise(nameof(DisplayTitle)); } }
     public Guid? CharacterId { get; set; }
-    public CharacterCard? CharacterSnapshot { get; set; }
+    private CharacterCard? characterSnapshot;
+    public CharacterCard? CharacterSnapshot { get => characterSnapshot; set { if (Set(ref characterSnapshot, value)) Raise(nameof(DisplayTitle)); } }
+    [JsonIgnore] public string DisplayTitle => ResolveTitle(Title, CharacterSnapshot?.Name, HasCustomTitle);
+
+    internal static string ResolveTitle(string title, string? characterName, bool? custom) =>
+        !string.IsNullOrWhiteSpace(characterName) && (custom == false || custom is null && (string.IsNullOrWhiteSpace(title) || title == DefaultTitle))
+            ? characterName : title;
     public Guid? ServiceId { get; set; }
     public string? Model { get; set; }
     public int? ContextWindowOverride { get; set; }
@@ -122,16 +131,20 @@ public sealed class Conversation : Observable
 public sealed class ConversationSummary : Observable
 {
     public ConversationSummary() { }
-    public ConversationSummary(Guid id, string title, DateTimeOffset updatedAt, string preview = "", string? characterName = null)
+    public ConversationSummary(Guid id, string title, DateTimeOffset updatedAt, string preview = "", string? characterName = null, bool? customTitle = null)
     {
-        Id = id; Title = title; UpdatedAt = updatedAt; Preview = preview; CharacterName = characterName;
+        Id = id; Title = title; UpdatedAt = updatedAt; Preview = preview; CharacterName = characterName; HasCustomTitle = customTitle;
     }
+    public static ConversationSummary FromConversation(Conversation chat) => new(chat.Id, chat.Title, chat.UpdatedAt,
+        Conversation.PreviewOf(chat), chat.CharacterSnapshot?.Name ?? "", chat.HasCustomTitle);
     public Guid Id { get; set; }
     private string title = "";
     public string Title { get => title; set { if (Set(ref title, value)) Raise(nameof(DisplayTitle)); } }
     private string? characterName;
     public string? CharacterName { get => characterName; set { if (Set(ref characterName, value)) Raise(nameof(DisplayTitle)); } }
-    [JsonIgnore] public string DisplayTitle => string.IsNullOrWhiteSpace(CharacterName) ? Title : CharacterName;
+    private bool? hasCustomTitle;
+    public bool? HasCustomTitle { get => hasCustomTitle; set { if (Set(ref hasCustomTitle, value)) Raise(nameof(DisplayTitle)); } }
+    [JsonIgnore] public string DisplayTitle => Conversation.ResolveTitle(Title, CharacterName, HasCustomTitle);
     private DateTimeOffset updatedAt;
     public DateTimeOffset UpdatedAt { get => updatedAt; set { if (Set(ref updatedAt, value)) Raise(nameof(DayKey)); } }
     private string preview = "";

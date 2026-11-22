@@ -38,6 +38,7 @@ public partial class MainWindow
         if (AutoScrollActive || AutoScrollLayer.IsVisible) throw new InvalidOperationException("Esc did not stop auto scroll");
         BeginAutoScroll(origin, false); ShowPage("cards");
         if (AutoScrollActive) throw new InvalidOperationException("Page navigation kept auto scroll active");
+        await VerifyChatTailAsync();
         await VM.NewChatAsync(VM.Characters.First()); ShowPage("chat");
         if (VM.SelectedModel is null) return;
         VM.Draft = "streaming lifecycle"; var run = VM.SendAsync();
@@ -59,5 +60,44 @@ public partial class MainWindow
         var interrupted = VM.Current.Messages.Last(); VM.Stop(); await stopped;
         if (interrupted.IsThinking || !interrupted.Stopped || string.IsNullOrEmpty(interrupted.Thinking)) throw new InvalidOperationException("Stopping did not close and preserve thinking");
         await VM.NewChatAsync(VM.Characters.First());
+    }
+
+    private async Task VerifyChatTailAsync()
+    {
+        await VM.NewChatAsync(); ShowPage("chat");
+        var answer = new ChatMessage { Role = "assistant", Incomplete = true, Content = "开始生成" };
+        VM.Current.Messages.Add(answer);
+        UpdateLayout();
+        var viewer = SmoothScroll.Viewer(MessagesList)!;
+        bool AtBottom() => viewer.ScrollableHeight > 0 && viewer.ScrollableHeight - viewer.VerticalOffset <= 1;
+        async Task GrowAsync(string label)
+        {
+            answer.Content += string.Concat(Enumerable.Range(1, 45).Select(i => $"\n\n{label} {i}"));
+            await WaitOverlayStateAsync(() => Descendants<MarkdownText>(MessagesList).Any(text => ReferenceEquals(text.DataContext, answer)
+                && new TextRange(text.Document.ContentStart, text.Document.ContentEnd).Text.Contains(label)));
+        }
+
+        await GrowAsync("首次增长");
+        await Task.Delay(180);
+        if (!AtBottom()) throw new InvalidOperationException($"First streaming growth did not reach the bottom: {viewer.VerticalOffset}/{viewer.ScrollableHeight}, follow={followOutput}, viewer owner={viewer.TemplatedParent?.GetType().Name}");
+        var firstBottom = viewer.VerticalOffset;
+        await GrowAsync("继续增长");
+        await WaitOverlayStateAsync(() => AtBottom() && viewer.VerticalOffset > firstBottom);
+        var bottomBeforeWheel = viewer.VerticalOffset;
+
+        // A high-resolution wheel increment can be smaller than the old 48-pixel sticking area.
+        var wheel = new MouseWheelEventArgs(Mouse.PrimaryDevice, Environment.TickCount, 48) { RoutedEvent = Mouse.PreviewMouseWheelEvent };
+        MessagesList.RaiseEvent(wheel);
+        await WaitOverlayStateAsync(() => viewer.VerticalOffset < bottomBeforeWheel - 1);
+        var readingOffset = viewer.VerticalOffset;
+        await GrowAsync("阅读历史时继续生成");
+        await Task.Delay(180);
+        if (Math.Abs(viewer.VerticalOffset - readingOffset) > 1 || AtBottom())
+            throw new InvalidOperationException("Streaming pulled the reader away from the position selected with the wheel");
+
+        viewer.ScrollToBottom();
+        await WaitOverlayStateAsync(AtBottom);
+        await GrowAsync("回到底部以后");
+        await WaitOverlayStateAsync(AtBottom);
     }
 }

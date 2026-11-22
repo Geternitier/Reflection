@@ -147,7 +147,9 @@ public sealed partial class MainViewModel : Observable, IDisposable
         Images = new ImagePipeline(Store.Images);
         Hook(current);
         History = CollectionViewSource.GetDefaultView(Conversations);
-        History.Filter = item => item is ConversationSummary chat && (chat.DisplayTitle.Contains(Search, StringComparison.OrdinalIgnoreCase) || chat.Title.Contains(Search, StringComparison.OrdinalIgnoreCase) || chat.Preview.Contains(Search, StringComparison.OrdinalIgnoreCase));
+        History.Filter = item => item is ConversationSummary chat && (chat.DisplayTitle.Contains(Search, StringComparison.OrdinalIgnoreCase)
+            || chat.Title.Contains(Search, StringComparison.OrdinalIgnoreCase) || chat.CharacterName?.Contains(Search, StringComparison.OrdinalIgnoreCase) == true
+            || chat.Preview.Contains(Search, StringComparison.OrdinalIgnoreCase));
         History.GroupDescriptions.Add(new PropertyGroupDescription(nameof(ConversationSummary.DayKey)));
         ((INotifyCollectionChanged)History).CollectionChanged += (_, _) => { Raise(nameof(HistoryEmpty)); Raise(nameof(HistoryEmptyText)); };
     }
@@ -271,10 +273,12 @@ public sealed partial class MainViewModel : Observable, IDisposable
         try
         {
             loading = true; Raise(nameof(Idle));
-            var reuse = IsUnused();
+            var reuse = IsUnused() && !Conversations.Any(summary => summary.Id == Current.Id);
             if (!reuse) await PersistDraftAsync();
             if (!reuse) Current = new();
             else Current.Messages.Clear();
+            Current.Title = Conversation.DefaultTitle;
+            Current.HasCustomTitle = false;
             Current.ContextWindowOverride = null;
             Draft = ""; Current.Draft = ""; Current.Attachments.Clear();
             ApplyCharacter(character);
@@ -301,7 +305,12 @@ public sealed partial class MainViewModel : Observable, IDisposable
             var message = new ChatMessage { Role = "user", Content = text };
             foreach (var image in Current.Attachments) message.Images.Add(image);
             Current.Messages.Add(message); Current.Attachments.Clear(); Draft = ""; Current.Draft = "";
-            if (Current.Title == "新的对话") { var first = text.Length > 0 ? text.ReplaceLineEndings(" ") : "图片"; Current.Title = first.Length > 28 ? first[..28] + "…" : first; }
+            if (Current.Title == Conversation.DefaultTitle && Current.HasCustomTitle != true)
+            {
+                var first = text.Length > 0 ? text.ReplaceLineEndings(" ") : "图片";
+                Current.Title = first.Length > 28 ? first[..28] + "…" : first;
+                Current.HasCustomTitle = false;
+            }
         }
         else if (replyOnly) { while (Current.Messages.Count > 0 && Current.Messages[^1] is { Role: "assistant", Opening: false } tail && string.IsNullOrWhiteSpace(tail.Content)) Current.Messages.RemoveAt(Current.Messages.Count - 1); }
         await CompleteAsync();
@@ -360,10 +369,11 @@ public sealed partial class MainViewModel : Observable, IDisposable
         RefreshCharacter(chat);
         await Store.SaveConversationAsync(chat);
         var summary = Conversations.FirstOrDefault(x => x.Id == chat.Id);
-        if (summary is null) Conversations.Insert(0, new(chat.Id, chat.Title, chat.UpdatedAt, Conversation.PreviewOf(chat), chat.CharacterSnapshot?.Name ?? ""));
+        if (summary is null) Conversations.Insert(0, ConversationSummary.FromConversation(chat));
         else
         {
             summary.CharacterName = chat.CharacterSnapshot?.Name ?? ""; summary.Title = chat.Title; summary.Preview = Conversation.PreviewOf(chat); summary.UpdatedAt = chat.UpdatedAt;
+            summary.HasCustomTitle = chat.HasCustomTitle;
         }
     }
     public async Task DeleteAsync(Guid id)
@@ -377,16 +387,21 @@ public sealed partial class MainViewModel : Observable, IDisposable
         Current = new(); Draft = "";
         ApplyCharacter(null);
     }
-    public async Task RenameAsync(ConversationSummary summary)
+    public async Task RenameAsync(Guid id, string title)
     {
-        var title = summary.Title.Trim();
-        if (!Idle || title.Length == 0) return;
-        summary.Title = title;
-        if (Current.Id == summary.Id) { Current.Title = title; await SaveCurrentAsync(); return; }
-        var chat = runs.TryGetValue(summary.Id, out var active) ? active.Chat : await Store.LoadConversationAsync(summary.Id);
-        chat.Title = title; chat.UpdatedAt = DateTimeOffset.Now;
-        await Store.SaveConversationAsync(chat);
-        summary.Title = chat.Title; summary.UpdatedAt = chat.UpdatedAt; summary.Preview = Conversation.PreviewOf(chat);
+        title = title.Trim();
+        if (title.Length == 0) return;
+        await navigation.WaitAsync();
+        try
+        {
+            if (!Idle) return;
+            var chat = Current.Id == id ? Current : runs.TryGetValue(id, out var active) ? active.Chat : await Store.LoadConversationAsync(id);
+            chat.Title = title; chat.HasCustomTitle = true;
+            if (ReferenceEquals(chat, Current)) await SaveCurrentAsync();
+            else { chat.UpdatedAt = DateTimeOffset.Now; await SaveConversationAsync(chat); }
+            History.Refresh();
+        }
+        finally { navigation.Release(); }
     }
     public Task SaveCharactersAsync() => Store.SaveCharactersAsync(Characters.ToList());
 
