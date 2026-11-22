@@ -616,8 +616,10 @@ await Test("Reader image paths resolve local references and reject remote source
     var image = Path.Combine(directory, "figures", "图 1.png");
     Check(ReaderDocuments.ResolveImagePath(document, "figures/%E5%9B%BE%201.png") == image);
     Check(ReaderDocuments.ResolveImagePath(document, new Uri(image).AbsoluteUri) == image);
+    Check(ReaderDocuments.ResolveImagePath(document, "figures/diagram.SVG") == Path.Combine(directory, "figures", "diagram.SVG"));
     foreach (var reference in new[] { "https://example.invalid/x.png", "//server/share/x.png",
-        "file://server/share/x.png", "%5c%5cserver/share/x.png", "data:image/png;base64,AAAA", "figure.png:alternate.png", "figure.svg" })
+        "file://server/share/x.png", "%5c%5cserver/share/x.png", "data:image/png;base64,AAAA", "figure.png:alternate.png",
+        "https://example.invalid/x.svg", "data:image/svg+xml,%3Csvg%2F%3E", "figure.svgz" })
         Check(ReaderDocuments.ResolveImagePath(document, reference) is null, "Unsafe image reference: " + reference);
     Check(ReaderDocuments.Parse(document, "![图](figures/x.png)").Pieces.Single().SourcePath == document);
     return Task.CompletedTask;

@@ -286,7 +286,7 @@ public static partial class ReaderDocuments
             var full = Path.GetFullPath(path, Path.GetDirectoryName(Path.GetFullPath(sourcePath))!);
             var root = Path.GetPathRoot(full);
             return root is { Length: 3 } && root[1] == ':' && Path.GetExtension(full).ToLowerInvariant() is
-                ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp" or ".tif" or ".tiff" or ".webp" ? full : null;
+                ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp" or ".tif" or ".tiff" or ".webp" or ".svg" ? full : null;
         }
         catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException) { return null; }
     }
