@@ -512,21 +512,30 @@ await Test("Theme preference is backward compatible and persisted", async () =>
     }
     finally { if (Directory.Exists(dir)) Directory.Delete(dir, true); }
 });
-await Test("Character history uses snapshot name while retaining topic titles", async () =>
+await Test("Character history uses role defaults and preserves custom and legacy titles", async () =>
 {
     var dir = Path.Combine(Environment.CurrentDirectory, "artifacts", "test-character-title-" + Guid.NewGuid().ToString("N"));
     try
     {
         var store = new LocalStore(dir);
-        var chat = new Conversation { Title = "公式讨论", CharacterSnapshot = new CharacterCard { Name = "数学老师" } };
+        var chat = new Conversation { Title = "公式讨论", HasCustomTitle = false, CharacterSnapshot = new CharacterCard { Name = "数学老师" } };
         await store.SaveConversationAsync(chat);
         var summary = (await store.LoadIndexAsync()).Single();
         Check(summary.DisplayTitle == "数学老师" && summary.Title == "公式讨论");
-        // A library edit has no bearing on the captured conversation identity.
         Check((await store.LoadConversationAsync(chat.Id)).CharacterSnapshot!.Name == summary.CharacterName);
+        chat.Title = Conversation.DefaultTitle;
+        chat.HasCustomTitle = true;
+        await store.SaveConversationAsync(chat);
+        Check((await store.LoadConversationAsync(chat.Id)).DisplayTitle == Conversation.DefaultTitle);
+        Check((await store.LoadIndexAsync()).Single().DisplayTitle == Conversation.DefaultTitle);
         var indexFile = Path.Combine(dir, "index.json");
+        File.Delete(indexFile);
+        File.Delete(indexFile + ".bak");
+        Check((await store.LoadIndexAsync()).Single().HasCustomTitle == true);
         await File.WriteAllTextAsync(indexFile, JsonSerializer.Serialize(new[] { new { id = chat.Id, title = "公式讨论", updatedAt = chat.UpdatedAt, preview = "" } }, LocalStore.Json));
         var legacy = (await store.LoadIndexAsync()).Single();
+        Check(legacy.DisplayTitle == "公式讨论" && legacy.CharacterName == "数学老师");
+        legacy.Title = Conversation.DefaultTitle;
         Check(legacy.DisplayTitle == "数学老师");
         var plain = new Conversation { Title = "普通对话" }; await store.SaveConversationAsync(plain);
         Check((await store.LoadIndexAsync()).Single(x => x.Id == plain.Id).DisplayTitle == "普通对话");

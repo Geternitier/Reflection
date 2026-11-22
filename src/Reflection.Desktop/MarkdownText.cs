@@ -80,7 +80,8 @@ public partial class MarkdownText : RichTextBox
             static double Horizontal(Thickness inset) =>
                 (double.IsFinite(inset.Left) ? inset.Left : 0) + (double.IsFinite(inset.Right) ? inset.Right : 0);
             // Allow a small rounding reserve so a glyph at the right edge does not wrap.
-            var desired = Math.Ceiling(width + Horizontal(paragraph.Margin) + Horizontal(paragraph.Padding) + Horizontal(paragraph.BorderThickness)) + 2;
+            var desired = Math.Ceiling(width + Horizontal(Document.PagePadding) + Horizontal(paragraph.Margin) +
+                Horizontal(paragraph.Padding) + Horizontal(paragraph.BorderThickness) + Horizontal(Padding) + Horizontal(BorderThickness)) + 2;
             constraint.Width = Math.Min(constraint.Width, desired);
         }
         return base.MeasureOverride(constraint);

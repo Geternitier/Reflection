@@ -46,10 +46,19 @@ public partial class MainWindow
         CancelCharacter_Requested(this, EventArgs.Empty);
         await VM.NewChatAsync(VM.Characters.First());
         VM.Current.Messages.Add(new Reflection.Core.ChatMessage { Role = "user", Content = "保留原会话主题" });
-        VM.Current.Title = "主题仍可搜索"; await VM.SaveCurrentAsync();
+        VM.Current.Title = "自动生成的主题"; await VM.SaveCurrentAsync();
         var summary = VM.Conversations.First(item => item.Id == VM.Current.Id);
-        if (summary.DisplayTitle != VM.Current.CharacterSnapshot?.Name || summary.Title != "主题仍可搜索") throw new InvalidOperationException("Character list name replaced the original conversation topic");
         ShowPage("chat");
+        UpdateLayout();
+        if (summary.DisplayTitle != VM.Current.CharacterSnapshot?.Name || PageLabel.Text != summary.DisplayTitle)
+            throw new InvalidOperationException("Character name was not the default conversation title");
+        BeginTitleEdit(TitleButton, new RoutedEventArgs());
+        TitleBox.Text = "我的公式笔记";
+        await CommitTitleAsync();
+        UpdateLayout();
+        var titleRow = Descendants<TextBlock>(HistoryList).Single(t => ReferenceEquals(t.DataContext, summary) && t.Text == "我的公式笔记");
+        if (!titleRow.IsVisible || PageLabel.Text != "我的公式笔记" || (await VM.Store.LoadIndexAsync()).Single(s => s.Id == summary.Id).DisplayTitle != "我的公式笔记")
+            throw new InvalidOperationException("An edited title did not reach the history row, header and saved index");
         await VM.ToggleHistoryAsync(); UpdateLayout();
         if (HistorySection.IsVisible || (await VM.Store.LoadSettingsAsync()).HistoryExpanded) throw new InvalidOperationException("History collapse did not hide and persist");
         await Task.Delay(220); UpdateLayout(); App.Capture(this, Path.Combine(output, "history-collapsed.png"));

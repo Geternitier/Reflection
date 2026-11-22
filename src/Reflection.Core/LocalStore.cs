@@ -45,7 +45,7 @@ public sealed class LocalStore
         {
             if (!Guid.TryParse(Path.GetFileNameWithoutExtension(file), out var id) || known.Contains(id) || File.Exists(Path.Combine(root, $"chats/{id}.deleted"))) continue;
             var chat = await LoadConversationAsync(id);
-            index.Add(new(id, chat.Title, chat.UpdatedAt, Conversation.PreviewOf(chat), chat.CharacterSnapshot?.Name ?? ""));
+            index.Add(ConversationSummary.FromConversation(chat));
         }
         foreach (var summary in index.Where(x => x.CharacterName is null))
         {
@@ -135,7 +135,7 @@ public sealed class LocalStore
             });
             var index = await LoadIndexAsync();
             index.RemoveAll(x => x.Id == value.Id);
-            index.Insert(0, new(value.Id, value.Title, value.UpdatedAt, Conversation.PreviewOf(value), value.CharacterSnapshot?.Name ?? ""));
+            index.Insert(0, ConversationSummary.FromConversation(value));
             await WriteCore("index.json", index);
         }
         finally { gate.Release(); }
