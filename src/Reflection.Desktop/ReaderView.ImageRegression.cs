@@ -78,5 +78,92 @@ public partial class ReaderView
         await OpenDocumentAsync(second); UpdateLayout();
         if (images.Any(image => image.Bitmap is not null))
             throw new InvalidOperationException("Unloaded reader images retained their display bitmaps");
+
+        await VerifySvgImagesAsync(figures.FullName, output);
+    }
+
+    private async Task VerifySvgImagesAsync(string folder, string output)
+    {
+        await File.WriteAllTextAsync(Path.Combine(folder, "图 形.SVG"), """
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="10 20 240 120">
+              <style>.shape { fill: #e04020; }</style>
+              <defs><path id="shape" class="shape" d="M20 30 H240 V130 H20 Z"/></defs>
+              <use href="#shape"/>
+            </svg>
+            """);
+        await File.WriteAllTextAsync(Path.Combine(folder, "invalid.svg"), "<svg");
+        await File.WriteAllTextAsync(Path.Combine(folder, "external.svg"), """
+            <svg xmlns="http://www.w3.org/2000/svg" width="240" height="120">
+              <image href="https://example.invalid/external.png" width="240" height="120"/>
+            </svg>
+            """);
+        await File.WriteAllTextAsync(Path.Combine(folder, "dtd.svg"), """
+            <!DOCTYPE svg SYSTEM "https://example.invalid/external.dtd">
+            <svg xmlns="http://www.w3.org/2000/svg" width="240" height="120"/>
+            """);
+        var path = Path.Combine(folder, "svg.md");
+        await File.WriteAllTextAsync(path, """
+            ![流程图](%E5%9B%BE%20%E5%BD%A2.SVG)
+
+            ![损坏的图](invalid.svg) ![含外部资源的图](external.svg) ![含 DTD 的图](dtd.svg)
+
+            ![远程 SVG](https://example.invalid/diagram.svg)
+            """);
+        await OpenDocumentAsync(path);
+        UpdateLayout();
+        var images = MainWindow.Descendants<ReadingImage>(Pages).ToArray();
+        var svg = images.Single(image => AutomationProperties.GetName(image) == "流程图");
+        var failures = images.Where(image => image != svg).ToArray();
+        var timeout = Stopwatch.StartNew();
+        while (timeout.Elapsed < TimeSpan.FromSeconds(5) && (svg.Bitmap is null || failures.Any(image => image.ToolTip is null)))
+            await Task.Delay(20);
+        if (svg.Bitmap is not { IsFrozen: true, PixelWidth: 240, PixelHeight: 120 } bitmap || failures.Length != 3
+            || failures.Any(image => image.Bitmap is not null || image.ToolTip is null))
+            throw new InvalidOperationException("SVG rendering or fallback failed: " + svg.ToolTip);
+
+        var pixel = new byte[4];
+        bitmap.CopyPixels(new Int32Rect(120, 60, 1, 1), pixel, 4, 0);
+        if (!pixel.SequenceEqual(new byte[] { 0x20, 0x40, 0xe0, 0xff }))
+            throw new InvalidOperationException("SVG local reference, CSS fill or channel order failed");
+        bitmap.CopyPixels(new Int32Rect(0, 0, 1, 1), pixel, 4, 0);
+        if (pixel[3] != 0) throw new InvalidOperationException("SVG transparency or viewBox offset was lost");
+        var text = string.Concat(MainWindow.Descendants<ReadingText>(Pages).Select(view =>
+            new TextRange(view.Document.ContentStart, view.Document.ContentEnd).Text));
+        if (!text.Contains("[图片：远程 SVG]")) throw new InvalidOperationException("Remote SVG fallback was lost");
+        App.Capture(Owner, Path.Combine(output, "reader-svg.png"));
+
+        var width = Owner.Width;
+        var theme = ThemeManager.IsDark ? "dark" : "light";
+        try
+        {
+            Owner.Width = Owner.MinWidth;
+            ThemeManager.Apply("dark");
+            UpdateLayout();
+            timeout.Restart();
+            do
+            {
+                await Task.Delay(20);
+                svg = MainWindow.Descendants<ReadingImage>(Pages).Single(image => AutomationProperties.GetName(image) == "流程图");
+            } while (svg.Bitmap is null && timeout.Elapsed < TimeSpan.FromSeconds(5));
+            UpdateLayout();
+            if (!ReferenceEquals(svg.Bitmap, bitmap) || svg.ActualWidth <= 0 || svg.ActualWidth >= Pages.ActualWidth)
+                throw new InvalidOperationException("SVG did not reuse its bitmap or fit the narrow dark reading column");
+            App.Capture(Owner, Path.Combine(output, "reader-svg-dark-narrow.png"));
+        }
+        finally
+        {
+            ThemeManager.Apply(theme);
+            Owner.Width = width;
+        }
+
+        var cycle = Path.Combine(folder, "cycle.svg");
+        await File.WriteAllTextAsync(cycle, """
+            <svg xmlns="http://www.w3.org/2000/svg" width="240" height="120">
+              <g id="cycle"><use href="#cycle"/></g>
+            </svg>
+            """);
+        try { await Owner.VM.Images.DisplayLocalAsync(cycle, 360, CancellationToken.None); }
+        catch (IOException ex) when (ex.Message.Contains("循环")) { return; }
+        throw new InvalidOperationException("Recursive SVG reference was accepted");
     }
 }

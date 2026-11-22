@@ -101,9 +101,10 @@ public sealed class ImagePipeline : IAsyncDisposable, IDisposable
             return ImportBytes(stream.ToArray());
         }, ct, (long)bitmap.PixelWidth * bitmap.PixelHeight * Math.Max(4, (bitmap.Format.BitsPerPixel + 7) / 8));
     }
-    private static byte[] ReadFile(string path)
+    private static byte[] ReadFile(string path, bool isSvg = false)
     {
         using var stream = File.OpenRead(path);
+        if (isSvg && stream.Length > SvgImageCodec.MaxFileBytes) throw new IOException("SVG 图片超过 2 MiB。");
         if (stream.Length is 0 or > ImageAssetStore.MaxFileBytes) throw new ArgumentException("请选择小于 20 MB 的图片。");
         var bytes = new byte[(int)stream.Length]; stream.ReadExactly(bytes); return bytes;
     }
@@ -218,7 +219,8 @@ public sealed class ImagePipeline : IAsyncDisposable, IDisposable
             }
             var file = new FileInfo(path);
             var key = $"reader:{path}:{limit}:{file.Length}:{file.LastWriteTimeUtc.Ticks}";
-            return FindBitmap(key) ?? DecodeCached(key, ReadFile(path), limit);
+            var isSvg = Path.GetExtension(path).Equals(".svg", StringComparison.OrdinalIgnoreCase);
+            return FindBitmap(key) ?? DecodeCached(key, ReadFile(path, isSvg), limit, isSvg);
         }, ct);
 
     private BitmapSource? FindBitmap(string key)
@@ -235,10 +237,11 @@ public sealed class ImagePipeline : IAsyncDisposable, IDisposable
         }
     }
 
-    private BitmapSource DecodeCached(string key, byte[] bytes, int limit)
+    private BitmapSource DecodeCached(string key, byte[] bytes, int limit, bool isSvg = false)
     {
         using var stream = new MemoryStream(bytes);
-        var bitmap = ImageCodec.Decode(stream, limit); DecodedBitmaps++;
+        var bitmap = isSvg ? SvgImageCodec.Decode(stream, limit) : ImageCodec.Decode(stream, limit);
+        DecodedBitmaps++;
         lock (gate)
         {
             if (!disposed)
